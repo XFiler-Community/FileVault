@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FileVault.Cli/FileVault.Cli.csproj" />
+    <Project Path="src/FileVault.Core/FileVault.Core.csproj" />
+    <Project Path="src/FileVault.Ftp/FileVault.Ftp.csproj" />
+    <Project Path="src/FileVault.Local/FileVault.Local.csproj" />
+    <Project Path="src/FileVault.Sftp/FileVault.Sftp.csproj" />
+    <Project Path="src/FileVault.YandexDisk/FileVault.YandexDisk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FileVault.Contract.Tests/FileVault.Contract.Tests.csproj" />
+    <Project Path="tests/FileVault.Core.Tests/FileVault.Core.Tests.csproj" />
+    <Project Path="tests/FileVault.Ftp.Tests/FileVault.Ftp.Tests.csproj" />
+    <Project Path="tests/FileVault.Local.Tests/FileVault.Local.Tests.csproj" />
+  </Folder>
+</Solution>
