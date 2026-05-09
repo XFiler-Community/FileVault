@@ -6,4 +6,22 @@
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
+
+  <!-- MinVer: version from git tags (e.g. v1.2.3 → 1.2.3) -->
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="6.*" PrivateAssets="All" />
+  </ItemGroup>
+
+  <!-- NuGet package metadata (shared) -->
+  <PropertyGroup>
+    <Authors>XFiler Community</Authors>
+    <Company>XFiler Community</Company>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/XFiler-Community/FileVault</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/XFiler-Community/FileVault.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>file-manager;file-provider;ftp;sftp;yandex-disk;cross-platform</PackageTags>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
 </Project>

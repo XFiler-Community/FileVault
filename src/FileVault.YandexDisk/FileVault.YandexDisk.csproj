@@ -1,4 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Yandex Disk cloud provider for FileVault. Implements IFileProvider for Yandex Disk using the REST API via Egorozh.YandexDisk.Client, with server-side copy/move and paginated listing.</Description>
+    <PackageTags>file-manager;file-provider;yandex;yandex-disk;cloud;storage</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\FileVault.Core\FileVault.Core.csproj" />
@@ -7,11 +17,5 @@
   <ItemGroup>
     <PackageReference Include="Egorozh.YandexDisk.Client" Version="8.2.0" />
   </ItemGroup>
-
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
 
 </Project>

@@ -1,4 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>SFTP provider for FileVault. Implements IFileProvider for SFTP servers using SSH.NET, with support for upload, download, rename, and directory operations.</Description>
+    <PackageTags>file-manager;file-provider;sftp;ssh;ssh.net</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\FileVault.Core\FileVault.Core.csproj" />
@@ -7,11 +17,5 @@
   <ItemGroup>
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
   </ItemGroup>
-
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
 
 </Project>
