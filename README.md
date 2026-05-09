@@ -6,7 +6,7 @@
 
 A platform-independent .NET library for working with file systems. The single `IFileProvider` interface abstracts away the differences between the local file system, FTP, SFTP, and cloud storage. Extracted from the file subsystem of [X-Filer Desktop](https://github.com/XFiler-Community/X-Filer.Desktop).
 
-> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · WSL (Windows)
 
 ## Packages
 
@@ -18,6 +18,7 @@ A platform-independent .NET library for working with file systems. The single `I
 | `FileVault.Sftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Sftp.svg)](https://www.nuget.org/packages/FileVault.Sftp) | SFTP via [SSH.NET](https://github.com/sshnet/SSH.NET) |
 | `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
 | `FileVault.GoogleDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GoogleDrive.svg)](https://www.nuget.org/packages/FileVault.GoogleDrive) | Google Drive via Drive API v3 |
+| `FileVault.Wsl` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Wsl.svg)](https://www.nuget.org/packages/FileVault.Wsl) | WSL distros via `\\wsl$\` UNC paths (Windows 10 1903+) |
 
 ## Installation
 
@@ -28,6 +29,7 @@ dotnet add package FileVault.Ftp
 dotnet add package FileVault.Sftp
 dotnet add package FileVault.YandexDisk
 dotnet add package FileVault.GoogleDrive
+dotnet add package FileVault.Wsl        # Windows only
 ```
 
 ## Quick Start
@@ -124,6 +126,25 @@ var folder = await resolver.ResolveAsync("gdrive:1BxiMVs0XRA5nFMdKvBdBZjgmUUqptl
 
 > **Authentication** is the caller's responsibility. Pass any `DriveService` — OAuth2 user, service account, or impersonation. See [Google Auth Library docs](https://developers.google.com/api-client-library/dotnet/guide/aaa_oauth).
 
+### WSL (Windows Subsystem for Linux)
+
+> Requires Windows 10 1903+ with WSL installed. No-op on macOS/Linux.
+
+```csharp
+using FileVault.Wsl;
+
+var resolver = new WslFileProviderResolver();
+
+// List installed distros
+var drives = await resolver.GetDrivesAsync();
+foreach (var drive in drives)
+    Console.WriteLine(drive.Name); // "Ubuntu", "Debian", ...
+
+// Access a path inside a distro
+// Route format: wsl://<distro>/<linux-path>
+var provider = await resolver.ResolveAsync("wsl://Ubuntu/home/user/projects");
+```
+
 ### Multiple providers at once
 
 `CompositeFileProviderResolver` queries a list of resolvers and returns the first match. Use it in integration entry points (UI, CLI).
@@ -216,6 +237,9 @@ services.AddSingleton<IFileProviderResolver>(_ =>
 
 services.AddSingleton<IFileProviderResolver>(_ =>
     new GoogleDriveFileProviderResolver(/* your DriveService */));
+
+// Windows only — silently returns empty on other platforms
+services.AddSingleton<IFileProviderResolver, WslFileProviderResolver>();
 
 services.AddSingleton<IFileProviderResolver>(sp =>
     new CompositeFileProviderResolver(sp.GetServices<IFileProviderResolver>()));

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>WSL (Windows Subsystem for Linux) filesystem provider for FileVault. Enumerates installed distros and exposes their filesystems via UNC paths (\\wsl$\). Windows 10 1903+ only.</Description>
+    <PackageTags>file-manager;file-provider;wsl;windows;linux</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileVault.Local\FileVault.Local.csproj" />
+  </ItemGroup>
+
+</Project>

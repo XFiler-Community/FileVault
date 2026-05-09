@@ -7,6 +7,7 @@
     <Project Path="src/FileVault.Sftp/FileVault.Sftp.csproj" />
     <Project Path="src/FileVault.YandexDisk/FileVault.YandexDisk.csproj" />
     <Project Path="src/FileVault.GoogleDrive/FileVault.GoogleDrive.csproj" />
+    <Project Path="src/FileVault.Wsl/FileVault.Wsl.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FileVault.Contract.Tests/FileVault.Contract.Tests.csproj" />
