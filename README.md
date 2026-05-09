@@ -6,6 +6,8 @@
 
 A platform-independent .NET library for working with file systems. The single `IFileProvider` interface abstracts away the differences between the local file system, FTP, SFTP, and cloud storage. Extracted from the file subsystem of [X-Filer Desktop](https://github.com/XFiler-Community/X-Filer.Desktop).
 
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive
+
 ## Packages
 
 | Package | NuGet | Description |
@@ -15,6 +17,7 @@ A platform-independent .NET library for working with file systems. The single `I
 | `FileVault.Ftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Ftp.svg)](https://www.nuget.org/packages/FileVault.Ftp) | FTP/FTPS via [FluentFTP](https://github.com/robinrodricks/FluentFTP) |
 | `FileVault.Sftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Sftp.svg)](https://www.nuget.org/packages/FileVault.Sftp) | SFTP via [SSH.NET](https://github.com/sshnet/SSH.NET) |
 | `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
+| `FileVault.GoogleDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GoogleDrive.svg)](https://www.nuget.org/packages/FileVault.GoogleDrive) | Google Drive via Drive API v3 |
 
 ## Installation
 
@@ -24,6 +27,7 @@ dotnet add package FileVault.Local
 dotnet add package FileVault.Ftp
 dotnet add package FileVault.Sftp
 dotnet add package FileVault.YandexDisk
+dotnet add package FileVault.GoogleDrive
 ```
 
 ## Quick Start
@@ -86,6 +90,39 @@ var provider = await resolver.ResolveAsync("x-filevault:yandex-disk");
 // Specific folder
 var photos = await resolver.ResolveAsync("disk:/Photos");
 ```
+
+### Google Drive
+
+```csharp
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Drive.v3;
+using Google.Apis.Services;
+using FileVault.GoogleDrive;
+
+// Build an authenticated DriveService (OAuth2 user credentials example)
+var credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
+    GoogleClientSecrets.FromFile("client_secrets.json").Secrets,
+    [DriveService.Scope.Drive],
+    user: "user",
+    CancellationToken.None);
+
+var driveService = new DriveService(new BaseClientService.Initializer
+{
+    HttpClientInitializer = credential,
+    ApplicationName = "MyApp",
+});
+
+// FileVault takes the pre-authenticated service — no OAuth logic inside the provider
+var resolver = new GoogleDriveFileProviderResolver(driveService);
+
+// My Drive root
+var root = await resolver.ResolveAsync("x-filevault:google-drive");
+
+// Specific folder by Drive file ID
+var folder = await resolver.ResolveAsync("gdrive:1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs");
+```
+
+> **Authentication** is the caller's responsibility. Pass any `DriveService` — OAuth2 user, service account, or impersonation. See [Google Auth Library docs](https://developers.google.com/api-client-library/dotnet/guide/aaa_oauth).
 
 ### Multiple providers at once
 
@@ -177,6 +214,9 @@ services.AddSingleton<IFileProviderResolver>(_ =>
         Password = config["Ftp:Password"],
     }));
 
+services.AddSingleton<IFileProviderResolver>(_ =>
+    new GoogleDriveFileProviderResolver(/* your DriveService */));
+
 services.AddSingleton<IFileProviderResolver>(sp =>
     new CompositeFileProviderResolver(sp.GetServices<IFileProviderResolver>()));
 ```
@@ -219,6 +259,10 @@ dotnet test tests/FileVault.Local.Tests
 
 # FTP integration tests (requires Docker)
 dotnet test tests/FileVault.Ftp.Tests --filter "Category=Integration"
+
+# Google Drive integration tests (requires a service account JSON)
+export GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON=/path/to/sa.json
+dotnet test tests/FileVault.GoogleDrive.Tests --filter "Category=Integration"
 ```
 
 ### Releasing
