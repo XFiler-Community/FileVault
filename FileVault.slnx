@@ -6,11 +6,13 @@
     <Project Path="src/FileVault.Local/FileVault.Local.csproj" />
     <Project Path="src/FileVault.Sftp/FileVault.Sftp.csproj" />
     <Project Path="src/FileVault.YandexDisk/FileVault.YandexDisk.csproj" />
+    <Project Path="src/FileVault.GoogleDrive/FileVault.GoogleDrive.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FileVault.Contract.Tests/FileVault.Contract.Tests.csproj" />
     <Project Path="tests/FileVault.Core.Tests/FileVault.Core.Tests.csproj" />
     <Project Path="tests/FileVault.Ftp.Tests/FileVault.Ftp.Tests.csproj" />
     <Project Path="tests/FileVault.Local.Tests/FileVault.Local.Tests.csproj" />
+    <Project Path="tests/FileVault.GoogleDrive.Tests/FileVault.GoogleDrive.Tests.csproj" />
   </Folder>
 </Solution>

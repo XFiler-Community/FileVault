@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Google Drive cloud provider for FileVault. Implements IFileProvider for Google Drive using the official Google Drive API v3, with server-side copy, paginated listing, and trash support.</Description>
+    <PackageTags>file-manager;file-provider;google;google-drive;cloud;storage</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileVault.Core\FileVault.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Apis.Drive.v3" Version="1.*" />
+  </ItemGroup>
+
+</Project>
