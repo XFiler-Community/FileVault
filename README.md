@@ -4,19 +4,19 @@
 [![NuGet](https://img.shields.io/nuget/v/FileVault.Core.svg)](https://www.nuget.org/packages/FileVault.Core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Универсальная, платформо-независимая библиотека .NET для работы с файловыми системами. Единый интерфейс `IFileProvider` скрывает разницу между локальной ФС, FTP, SFTP и облачными хранилищами. Извлечена из файловой подсистемы [X-Filer Desktop](https://github.com/XFiler-Community/X-Filer.Desktop).
+A platform-independent .NET library for working with file systems. The single `IFileProvider` interface abstracts away the differences between the local file system, FTP, SFTP, and cloud storage. Extracted from the file subsystem of [X-Filer Desktop](https://github.com/XFiler-Community/X-Filer.Desktop).
 
-## Пакеты
+## Packages
 
-| Пакет | NuGet | Описание |
+| Package | NuGet | Description |
 |---|---|---|
-| `FileVault.Core` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Core.svg)](https://www.nuget.org/packages/FileVault.Core) | Контракты и хелперы. Зависит только от BCL |
-| `FileVault.Local` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Local.svg)](https://www.nuget.org/packages/FileVault.Local) | Локальная файловая система |
-| `FileVault.Ftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Ftp.svg)](https://www.nuget.org/packages/FileVault.Ftp) | FTP/FTPS через [FluentFTP](https://github.com/robinrodricks/FluentFTP) |
-| `FileVault.Sftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Sftp.svg)](https://www.nuget.org/packages/FileVault.Sftp) | SFTP через [SSH.NET](https://github.com/sshnet/SSH.NET) |
-| `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Яндекс Диск через REST API |
+| `FileVault.Core` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Core.svg)](https://www.nuget.org/packages/FileVault.Core) | Contracts and helpers. Depends only on BCL |
+| `FileVault.Local` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Local.svg)](https://www.nuget.org/packages/FileVault.Local) | Local file system |
+| `FileVault.Ftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Ftp.svg)](https://www.nuget.org/packages/FileVault.Ftp) | FTP/FTPS via [FluentFTP](https://github.com/robinrodricks/FluentFTP) |
+| `FileVault.Sftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Sftp.svg)](https://www.nuget.org/packages/FileVault.Sftp) | SFTP via [SSH.NET](https://github.com/sshnet/SSH.NET) |
+| `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
 
-## Установка
+## Installation
 
 ```shell
 dotnet add package FileVault.Core
@@ -26,9 +26,9 @@ dotnet add package FileVault.Sftp
 dotnet add package FileVault.YandexDisk
 ```
 
-## Быстрый старт
+## Quick Start
 
-### Локальная файловая система
+### Local file system
 
 ```csharp
 using FileVault.Core;
@@ -67,29 +67,29 @@ var resolver = new SftpFileProviderResolver(new SftpConnection
 {
     Host           = "ssh.example.com",
     Username       = "deploy",
-    PrivateKeyPath = "~/.ssh/id_rsa",   // или Password
+    PrivateKeyPath = "~/.ssh/id_rsa",   // or use Password
 });
 
 var provider = await resolver.ResolveAsync("sftp://ssh.example.com/var/data");
 ```
 
-### Яндекс Диск
+### Yandex Disk
 
 ```csharp
 using FileVault.YandexDisk;
 
 var resolver = new YandexDiskFileProviderResolver(oauthToken: "y0_AgAAAA...");
 
-// Корень диска
+// Disk root
 var provider = await resolver.ResolveAsync("x-filevault:yandex-disk");
 
-// Конкретная папка
-var photos = await resolver.ResolveAsync("disk:/Фотографии");
+// Specific folder
+var photos = await resolver.ResolveAsync("disk:/Photos");
 ```
 
-### Несколько провайдеров одновременно
+### Multiple providers at once
 
-`CompositeFileProviderResolver` опрашивает список резолверов и возвращает первый результат. Используется в точках интеграции (UI, CLI).
+`CompositeFileProviderResolver` queries a list of resolvers and returns the first match. Use it in integration entry points (UI, CLI).
 
 ```csharp
 using FileVault.Core;
@@ -101,53 +101,54 @@ var resolver = new CompositeFileProviderResolver([
     new FtpFileProviderResolver(new FtpConnection { Host = "ftp.example.com", ... }),
 ]);
 
-// Работает для любого пути — локального или FTP
+// Works for any path — local or FTP
 var provider = await resolver.ResolveAsync(path);
 ```
 
-## Основные операции
+## Core Operations
 
-Все операции атомарны с точки зрения провайдера. Успех/ошибка возвращаются через `FileOperationResult<T>` — исключения не летят в вызывающий код.
+All operations return `FileOperationResult<T>` — exceptions never propagate to the caller.
 
 ```csharp
-// Создать папку (при конфликте имени добавит " (2)", " (3)" и т.д.)
+// Create folder (appends " (2)", " (3)", etc. on name conflict)
 var result = await provider.CreateFolderAsync("NewFolder");
 if (result.IsSuccess)
     Console.WriteLine(result.Result!.FullName);
 
-// Скопировать файл В этот провайдер из любого другого
-var destPath = "/backups/report.pdf";
-var copyResult = await destProvider.CopyFileInAsync(sourceFileItem, destPath, new Progress<double>(
-    v => Console.Write($"\r{v:P0}")
-));
+// Copy a file INTO this provider from any other provider
+var copyResult = await destProvider.CopyFileInAsync(
+    sourceFileItem,
+    "/backups/report.pdf",
+    new Progress<double>(v => Console.Write($"\r{v:P0}"))
+);
 
-// Переместить файл (same-drive — нативный move; cross-provider — copy+delete)
+// Move a file (same-drive: native move; cross-provider: copy + delete)
 await destProvider.MoveFileInAsync(sourceFileItem, destPath, progress);
 
-// Удалить
+// Delete
 await provider.DeleteAsync([item], toRecycleBin: false);
 
-// Переименовать
+// Rename
 await provider.RenameAsync(item, "new-name.txt");
 
-// Получить уникальный путь назначения (файл НЕ создаётся)
+// Resolve a unique destination path (file is NOT created on disk)
 var dest = await provider.ResolveDestinationFileAsync(sourceFile, overwrite: false);
-// "report.pdf" → "report (2).pdf" если оригинал уже существует
+// "report.pdf" → "report (2).pdf" if the name is already taken
 ```
 
-### Копирование папок между провайдерами
+### Copying folders across providers
 
-`CopyFolderInAsync` возвращает `null` в `Result` вместо ошибки, если провайдер не поддерживает нативное копирование (FTP, SFTP, cross-provider). Оркестратор должен выполнить рекурсию самостоятельно:
+`CopyFolderInAsync` returns `null` in `Result` — not an error — when the provider does not support native folder copying (FTP, SFTP, or cross-provider scenarios). The orchestrator is expected to recurse manually:
 
 ```csharp
 async Task RecursiveCopyAsync(IFolderItem source, IFileProvider dest, string destPath)
 {
-    // Пробуем нативное копирование (Yandex: server-side; остальные: null)
+    // Attempt native copy (Yandex Disk: server-side; others: returns null)
     var result = await dest.CopyFolderInAsync(source, destPath, progress);
     if (result.IsSuccess && result.Result is not null)
-        return; // готово
+        return; // done
 
-    // Нативного нет — рекурсия вручную
+    // No native support — recurse manually
     await dest.CreateFolderAsync(source.Name);
     var subProvider = source.CreateProvider();
 
@@ -161,9 +162,9 @@ async Task RecursiveCopyAsync(IFolderItem source, IFileProvider dest, string des
 }
 ```
 
-## Интеграция с Microsoft.Extensions.DependencyInjection
+## Microsoft.Extensions.DependencyInjection
 
-Каждый пакет регистрирует свой `IFileProviderResolver`. `CompositeFileProviderResolver` собирает их вместе.
+Each package registers its own `IFileProviderResolver`. `CompositeFileProviderResolver` aggregates them.
 
 ```csharp
 services.AddSingleton<IFileProviderResolver, LocalFileProviderResolver>();
@@ -180,14 +181,14 @@ services.AddSingleton<IFileProviderResolver>(sp =>
     new CompositeFileProviderResolver(sp.GetServices<IFileProviderResolver>()));
 ```
 
-## Добавление собственного провайдера
+## Adding a Custom Provider
 
-1. Реализуйте `IFileProvider` (и `IFileProviderItem`, `IFileItem`, `IFolderItem` для ваших элементов).
-2. Реализуйте `IFileProviderResolver`.
-3. Напишите тесты, наследуясь от `FileProviderContractTests` из пакета `FileVault.Contract.Tests`.
+1. Implement `IFileProvider` (and `IFileItem`, `IFolderItem` for your items).
+2. Implement `IFileProviderResolver`.
+3. Write tests by inheriting `FileProviderContractTests` from the `FileVault.Contract.Tests` package — all 17 contract tests run automatically.
 
 ```csharp
-// MyProvider.Tests.csproj
+// In your MyProvider.Tests project:
 // <PackageReference Include="FileVault.Contract.Tests" Version="..." />
 
 public class MyProviderContractTests : FileProviderContractTests
@@ -202,16 +203,14 @@ public class MyProviderContractTests : FileProviderContractTests
 }
 ```
 
-Все 17 контрактных тестов запустятся автоматически.
+## Development
 
-## Разработка
-
-### Требования
+### Prerequisites
 
 - .NET 10 SDK
-- Docker (для интеграционных тестов FTP через TestContainers)
+- Docker (for FTP integration tests via TestContainers)
 
-### Сборка и тесты
+### Build & Test
 
 ```shell
 dotnet build
@@ -222,17 +221,17 @@ dotnet test tests/FileVault.Local.Tests
 dotnet test tests/FileVault.Ftp.Tests --filter "Category=Integration"
 ```
 
-### Релиз
+### Releasing
 
-Версия задаётся через git-тег:
+Versions are driven by git tags:
 
 ```shell
 git tag v1.2.0
 git push origin v1.2.0
 ```
 
-GitHub Actions запакует и опубликует все пакеты на NuGet.org автоматически.
+GitHub Actions will pack and publish all packages to NuGet.org automatically.
 
-## Лицензия
+## License
 
 [MIT](LICENSE)
