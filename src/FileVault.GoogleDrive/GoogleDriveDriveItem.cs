@@ -15,6 +15,7 @@ public sealed class GoogleDriveDriveItem(DriveService service, long totalSize, l
     public long? Size => null;
     public long TotalSize => totalSize;
     public long TotalFreeSpace => totalSize - usedSize;
+    public bool IsUserVisible => true;
 
     public IFileProvider CreateProvider() => new GoogleDriveFileProvider(service, GoogleDriveRoot);
 }

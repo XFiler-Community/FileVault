@@ -36,6 +36,7 @@ public sealed class WslDriveItem : IDriveItem
     // DriveInfo doesn't support WSL UNC paths — disk usage unavailable
     public long TotalSize => 0;
     public long TotalFreeSpace => 0;
+    public bool IsUserVisible => true;
 
     public IFileProvider CreateProvider() => new LocalFileProvider(_uncPath);
 }
