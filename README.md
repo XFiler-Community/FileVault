@@ -4,7 +4,7 @@
 [![NuGet](https://img.shields.io/nuget/v/FileVault.Core.svg)](https://www.nuget.org/packages/FileVault.Core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A platform-independent .NET library for working with file systems. The single `IFileProvider` interface abstracts away the differences between the local file system, FTP, SFTP, and cloud storage. Extracted from the file subsystem of [X-Filer Desktop](https://github.com/XFiler-Community/X-Filer.Desktop).
+A platform-independent .NET library for working with file systems. The single `IFileProvider` interface abstracts away the differences between the local file system, FTP, SFTP, and cloud storage. Extracted from the file subsystem of [X-Filer Desktop](https://x-filer.com).
 
 > **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · WSL (Windows)
 
