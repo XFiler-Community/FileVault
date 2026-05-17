@@ -43,7 +43,6 @@ Do all of these in one session:
 
 1. **Create `src/FileVault.<Name>/`** with these files:
    - `FileVault.<Name>.csproj`
-   - `<Name>FileProviderResolver.cs`
    - `<Name>FileProvider.cs`
    - `<Name>FileItem.cs`
    - `<Name>FolderItem.cs`
@@ -177,18 +176,20 @@ Used when the provider API doesn't return full metadata after a write operation.
 
 ---
 
-## Route formats
+## Provider identity formats
 
-| Provider | Route | Notes |
+FileVault providers expose `FullName` values, but user-entered path parsing and backend selection belong to the client application. Do not add a shared resolver layer to this library.
+
+| Provider | FullName convention | Notes |
 |---|---|---|
 | Local | Absolute rooted path | `C:\Users\alice`, `/home/bob` |
 | FTP | `ftp://host/path` | Port optional |
 | SFTP | `sftp://host/path` | Port optional |
-| Yandex Disk | `x-filevault:yandex-disk` (root) · `disk:/path` (subfolder) | |
-| Google Drive | `x-filevault:google-drive` (root) · `gdrive:<fileId>` (subfolder) | |
-| WSL | `wsl://<distro>` · `wsl://<distro>/linux/path` | Windows only; maps to `\\wsl$\<distro>\` |
+| Yandex Disk | `disk:/` (root) · `disk:/path` (subfolder) | |
+| Google Drive | `gdrive:root` (root) · `gdrive:<fileId>` (subfolder) | |
+| WSL | `\\wsl$\<distro>\` | Windows only; use `FileVault.Local` against the UNC path |
 
-`ResolveAsync` must return `null` (not throw) for routes it does not own.
+Clients decide whether to use these strings, their own saved-location model, or another route format.
 
 ---
 
@@ -203,8 +204,8 @@ Callers check with `item is IOpenableItem openable` before calling `Open()`.
 ## Windows-only providers
 
 Providers that only function on Windows (currently `FileVault.Wsl`) must:
-- Return `null` / empty list from all `IFileProviderResolver` methods when `!OperatingSystem.IsWindows()`.
-- Never throw on other platforms.
+- Guard Windows-only APIs with `OperatingSystem.IsWindows()`.
+- Never throw on other platforms for platform discovery helpers.
 
 ---
 

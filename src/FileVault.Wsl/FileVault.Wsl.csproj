@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <Description>WSL (Windows Subsystem for Linux) filesystem provider for FileVault. Enumerates installed distros and exposes their filesystems via UNC paths (\\wsl$\). Windows 10 1903+ only.</Description>
+    <Description>WSL (Windows Subsystem for Linux) helpers for FileVault. Exposes WSL distro roots through FileVault.Local via UNC paths (\\wsl$\). Windows 10 1903+ only.</Description>
     <PackageTags>file-manager;file-provider;wsl;windows;linux</PackageTags>
   </PropertyGroup>
 

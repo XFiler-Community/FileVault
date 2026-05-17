@@ -6,7 +6,9 @@
 
 A platform-independent .NET library for working with file systems. The single `IFileProvider` interface abstracts away the differences between the local file system, FTP, SFTP, and cloud storage. Extracted from the file subsystem of [X-Filer Desktop](https://x-filer.com).
 
-> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · WSL (Windows)
+FileVault does not parse user-entered paths or choose a backend for an application. The client resolves its own routes, bookmarks, accounts, and credentials, then creates the appropriate `IFileProvider` directly.
+
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · WSL via UNC paths (Windows)
 
 ## Packages
 
@@ -40,10 +42,9 @@ dotnet add package FileVault.Wsl        # Windows only
 using FileVault.Core;
 using FileVault.Local;
 
-var resolver = new LocalFileProviderResolver();
-var provider = await resolver.ResolveAsync("/home/user/Documents");
+var provider = new LocalFileProvider("/home/user/Documents");
 
-await foreach (var item in provider!.GetItemsAsync(FileProviderFilter.Default))
+await foreach (var item in provider.GetItemsAsync(FileProviderFilter.Default))
 {
     Console.WriteLine($"{item.Name}  {item.Size?.ToString() ?? "<dir>"}");
 }
@@ -53,44 +54,40 @@ await foreach (var item in provider!.GetItemsAsync(FileProviderFilter.Default))
 
 ```csharp
 using FileVault.Ftp;
+using FluentFTP;
 
-var resolver = new FtpFileProviderResolver(new FtpConnection
-{
-    Host     = "ftp.example.com",
-    Username = "user",
-    Password = "secret",
-});
+var client = new AsyncFtpClient("ftp.example.com", "user", "secret");
+await client.Connect();
 
-var provider = await resolver.ResolveAsync("ftp://ftp.example.com/public");
+var provider = new FtpFileProvider(client, "/public");
 ```
 
 ### SFTP
 
 ```csharp
 using FileVault.Sftp;
+using Renci.SshNet;
 
-var resolver = new SftpFileProviderResolver(new SftpConnection
-{
-    Host           = "ssh.example.com",
-    Username       = "deploy",
-    PrivateKeyPath = "~/.ssh/id_rsa",   // or use Password
-});
+var privateKeyFile = new PrivateKeyFile("/home/user/.ssh/id_rsa");
+var client = new SftpClient("ssh.example.com", "deploy", privateKeyFile);
+client.Connect();
 
-var provider = await resolver.ResolveAsync("sftp://ssh.example.com/var/data");
+var provider = new SftpFileProvider(client, "/var/data");
 ```
 
 ### Yandex Disk
 
 ```csharp
+using Egorozh.YandexDisk.Client.Http;
 using FileVault.YandexDisk;
 
-var resolver = new YandexDiskFileProviderResolver(oauthToken: "y0_AgAAAA...");
+var api = new DiskHttpApi("y0_AgAAAA...", logSaver: null);
 
 // Disk root
-var provider = await resolver.ResolveAsync("x-filevault:yandex-disk");
+var provider = new YandexDiskFileProvider(api, "disk:/");
 
 // Specific folder
-var photos = await resolver.ResolveAsync("disk:/Photos");
+var photos = new YandexDiskFileProvider(api, "disk:/Photos");
 ```
 
 ### Google Drive
@@ -115,13 +112,12 @@ var driveService = new DriveService(new BaseClientService.Initializer
 });
 
 // FileVault takes the pre-authenticated service — no OAuth logic inside the provider
-var resolver = new GoogleDriveFileProviderResolver(driveService);
 
 // My Drive root
-var root = await resolver.ResolveAsync("x-filevault:google-drive");
+var root = new GoogleDriveFileProvider(driveService, "root");
 
 // Specific folder by Drive file ID
-var folder = await resolver.ResolveAsync("gdrive:1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs");
+var folder = new GoogleDriveFileProvider(driveService, "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs");
 ```
 
 > **Authentication** is the caller's responsibility. Pass any `DriveService` — OAuth2 user, service account, or impersonation. See [Google Auth Library docs](https://developers.google.com/api-client-library/dotnet/guide/aaa_oauth).
@@ -131,36 +127,30 @@ var folder = await resolver.ResolveAsync("gdrive:1BxiMVs0XRA5nFMdKvBdBZjgmUUqptl
 > Requires Windows 10 1903+ with WSL installed. No-op on macOS/Linux.
 
 ```csharp
+using FileVault.Local;
 using FileVault.Wsl;
 
-var resolver = new WslFileProviderResolver();
-
-// List installed distros
-var drives = await resolver.GetDrivesAsync();
-foreach (var drive in drives)
-    Console.WriteLine(drive.Name); // "Ubuntu", "Debian", ...
-
-// Access a path inside a distro
-// Route format: wsl://<distro>/<linux-path>
-var provider = await resolver.ResolveAsync("wsl://Ubuntu/home/user/projects");
+var root = new WslDriveItem("Ubuntu").CreateProvider();
+var provider = new LocalFileProvider(@"\\wsl$\Ubuntu\home\user\projects");
 ```
 
-### Multiple providers at once
+### Application-level routing
 
-`CompositeFileProviderResolver` queries a list of resolvers and returns the first match. Use it in integration entry points (UI, CLI).
+If an application supports multiple backends, it should store enough information to construct the right provider itself: local path, FTP remote path plus authenticated client, Google Drive folder ID plus `DriveService`, and so on.
 
 ```csharp
 using FileVault.Core;
 using FileVault.Ftp;
 using FileVault.Local;
+using FileVault.GoogleDrive;
 
-var resolver = new CompositeFileProviderResolver([
-    new LocalFileProviderResolver(),
-    new FtpFileProviderResolver(new FtpConnection { Host = "ftp.example.com", ... }),
-]);
-
-// Works for any path — local or FTP
-var provider = await resolver.ResolveAsync(path);
+IFileProvider provider = location.Kind switch
+{
+    LocationKind.Local => new LocalFileProvider(location.Path),
+    LocationKind.Ftp => new FtpFileProvider(ftpClient, location.RemotePath),
+    LocationKind.GoogleDrive => new GoogleDriveFileProvider(driveService, location.FolderId),
+    _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
+};
 ```
 
 ## Core Operations
@@ -222,33 +212,27 @@ async Task RecursiveCopyAsync(IFolderItem source, IFileProvider dest, string des
 
 ## Microsoft.Extensions.DependencyInjection
 
-Each package registers its own `IFileProviderResolver`. `CompositeFileProviderResolver` aggregates them.
+Register authenticated clients, services, or app-specific factories. FileVault itself does not provide a DI routing abstraction.
 
 ```csharp
-services.AddSingleton<IFileProviderResolver, LocalFileProviderResolver>();
+services.AddSingleton(driveService);
+services.AddSingleton(ftpClient);
 
-services.AddSingleton<IFileProviderResolver>(_ =>
-    new FtpFileProviderResolver(new FtpConnection
-    {
-        Host     = config["Ftp:Host"]!,
-        Username = config["Ftp:Username"],
-        Password = config["Ftp:Password"],
-    }));
-
-services.AddSingleton<IFileProviderResolver>(_ =>
-    new GoogleDriveFileProviderResolver(/* your DriveService */));
-
-// Windows only — silently returns empty on other platforms
-services.AddSingleton<IFileProviderResolver, WslFileProviderResolver>();
-
-services.AddSingleton<IFileProviderResolver>(sp =>
-    new CompositeFileProviderResolver(sp.GetServices<IFileProviderResolver>()));
+services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => location.Kind switch
+{
+    LocationKind.Local => new LocalFileProvider(location.Path),
+    LocationKind.Ftp => new FtpFileProvider(sp.GetRequiredService<AsyncFtpClient>(), location.RemotePath),
+    LocationKind.GoogleDrive => new GoogleDriveFileProvider(
+        sp.GetRequiredService<DriveService>(),
+        location.FolderId),
+    _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
+});
 ```
 
 ## Adding a Custom Provider
 
 1. Implement `IFileProvider` (and `IFileItem`, `IFolderItem` for your items).
-2. Implement `IFileProviderResolver`.
+2. Decide in your application how users select or address this provider.
 3. Write tests by inheriting `FileProviderContractTests` from the `FileVault.Contract.Tests` package — all 17 contract tests run automatically.
 
 ```csharp

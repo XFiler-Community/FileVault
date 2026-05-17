@@ -266,32 +266,18 @@ public interface IFileProvider
 }
 ```
 
-### IFileProviderResolver.cs
+### Provider construction
 
 ```csharp
-namespace FileVault.Core;
-
-/// <summary>
-/// Создаёт IFileProvider по пути/URI и перечисляет корневые "диски" провайдера.
-/// Каждый тип провайдера регистрирует свой Resolver в DI как IFileProviderResolver.
-/// При нескольких зарегистрированных резолверах они опрашиваются по очереди.
-/// </summary>
-public interface IFileProviderResolver
+// FileVault не резолвит пользовательские route/path строки.
+// Клиент сам выбирает backend, credentials и folder/path/id, затем создаёт provider напрямую.
+IFileProvider provider = savedLocation.Kind switch
 {
-    /// <summary>
-    /// Возвращает null если этот резолвер не умеет обрабатывать данный route.
-    /// LocalResolver обрабатывает "C:\", "/home/user".
-    /// FtpResolver обрабатывает "ftp://host/path".
-    /// YandexResolver обрабатывает "x-filevault:yandex-disk".
-    /// </summary>
-    Task<IFileProvider?> ResolveAsync(string route, CancellationToken ct = default);
-
-    /// <summary>Корневые "диски" (буквы дисков, облачные корни, FTP-хосты).</summary>
-    Task<IReadOnlyList<IDriveItem>> GetDrivesAsync(CancellationToken ct = default);
-
-    /// <summary>Возвращает IFolderItem для пути (для навигации без полного провайдера).</summary>
-    Task<IFolderItem?> GetFolderAsync(string route, CancellationToken ct = default);
-}
+    LocationKind.Local => new LocalFileProvider(savedLocation.Path),
+    LocationKind.Ftp => new FtpFileProvider(ftpClient, savedLocation.RemotePath),
+    LocationKind.GoogleDrive => new GoogleDriveFileProvider(driveService, savedLocation.FolderId),
+    _ => throw new NotSupportedException()
+};
 ```
 
 ### FileProviderFilter.cs
@@ -464,17 +450,19 @@ public IFileProvider CreateProvider() => new FtpFileProvider(_client, FullName);
 Это избавляет от необходимости передавать connection через весь стек.
 Недостаток: FolderItem держит ссылку на connection-объект. Это приемлемо.
 
-### 7. Именование маршрутов
+### 7. Именование провайдеров
 
-| Провайдер | Пример маршрута |
+Это значения `FullName`/идентичности провайдеров, а не общий resolver contract.
+Пользовательские routes, saved locations и выбор backend'а принадлежат клиентскому приложению.
+
+| Провайдер | Пример FullName |
 |---|---|
 | Local (Windows) | `C:\Users\John` |
 | Local (macOS/Linux) | `/home/john/Documents` |
 | FTP | `ftp://ftp.example.com/public` |
 | SFTP | `sftp://server.com/home/user` |
-| Yandex Disk | `x-filevault:yandex-disk` (корень), `disk:/Photos` (подпапка) |
-
-`IFileProviderResolver.ResolveAsync(route)` смотрит на префикс и возвращает `null` если не его.
+| Yandex Disk | `disk:/` (корень), `disk:/Photos` (подпапка) |
+| Google Drive | `gdrive:root` (корень), `gdrive:<fileId>` (папка) |
 
 ---
 
@@ -574,8 +562,8 @@ public SystemFileItem(string filePath)
 
 Структура провайдера:
 ```csharp
-// Credentials хранятся в FtpConnection, провайдер получает клиент через замыкание
-public class FtpFileProvider(AsyncFtpClient client, string remotePath, ILogger logger) : IFileProvider
+// Credentials и создание клиента остаются в приложении; провайдер получает готовый client.
+public class FtpFileProvider(AsyncFtpClient client, string remotePath) : IFileProvider
 {
     public string Name => Path.GetFileName(remotePath.TrimEnd('/'));
     public string FullName => $"ftp://{client.Host}{remotePath}";
@@ -778,8 +766,7 @@ public class LocalFileProviderContractTests : FileProviderContractTests
     {
         _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
-        var resolver = new LocalFileProviderResolver(/* IFileOperations stub */);
-        return resolver.ResolveAsync(_tempDir)!;
+        return Task.FromResult<IFileProvider>(new LocalFileProvider(_tempDir));
     }
 
     protected override Task SeedFileAsync(string name, byte[] content)
@@ -878,13 +865,10 @@ filevault mkdir <path> <name>
 Пример команды `list`:
 ```csharp
 // Program.cs
-var resolver = new CompositeFileProviderResolver([
-    new LocalFileProviderResolver(),
-    new FtpFileProviderResolver(),
-]);
+var path = Path.GetFullPath(args[1]);
+if (!Directory.Exists(path)) { Console.Error.WriteLine("Directory not found"); return 1; }
 
-var provider = await resolver.ResolveAsync(args[1]);
-if (provider is null) { Console.Error.WriteLine("Unknown path"); return 1; }
+var provider = new LocalFileProvider(path);
 
 await foreach (var item in provider.GetItemsAsync(FileProviderFilter.ShowAll))
 {
@@ -893,8 +877,8 @@ await foreach (var item in provider.GetItemsAsync(FileProviderFilter.ShowAll))
 }
 ```
 
-`CompositeFileProviderResolver` — простой класс в `FileVault.Core` (НЕ интерфейс),
-который опрашивает список резолверов и возвращает первый ненулевой результат.
+Если CLI/приложение поддерживает несколько backend'ов, оно само хранит saved-location модель
+и выбирает нужный `IFileProvider`.
 
 ---
 
@@ -904,21 +888,17 @@ await foreach (var item in provider.GetItemsAsync(FileProviderFilter.ShowAll))
 `Microsoft.Extensions.DependencyInjection`:
 
 ```csharp
-// Extension methods в каждом пакете:
-// FileVault.Local:
-services.AddLocalFileProvider();
-
-// FileVault.Ftp:
-services.AddFtpFileProvider(options => {
-    options.Host = "ftp.example.com";
-    options.Username = "user";
-    options.Password = "pass";
+services.AddSingleton(driveService);
+services.AddSingleton(ftpClient);
+services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => location.Kind switch
+{
+    LocationKind.Local => new LocalFileProvider(location.Path),
+    LocationKind.Ftp => new FtpFileProvider(sp.GetRequiredService<AsyncFtpClient>(), location.RemotePath),
+    LocationKind.GoogleDrive => new GoogleDriveFileProvider(
+        sp.GetRequiredService<DriveService>(),
+        location.FolderId),
+    _ => throw new NotSupportedException()
 });
-
-// Под капотом все регистрируют IFileProviderResolver.
-// CompositeFileProviderResolver собирает их вместе:
-services.AddSingleton<IFileProviderResolver>(sp =>
-    new CompositeFileProviderResolver(sp.GetServices<IFileProviderResolver>()));
 ```
 
 ---

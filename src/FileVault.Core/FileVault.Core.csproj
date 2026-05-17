@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <Description>Core contracts and helpers for FileVault: IFileProvider, IFileItem, IFolderItem, IDriveItem, FileOperationResult, FileOperationsHelper, CompositeFileProviderResolver.</Description>
+    <Description>Core contracts and helpers for FileVault: IFileProvider, IFileItem, IFolderItem, IDriveItem, FileOperationResult, and FileOperationsHelper.</Description>
     <PackageTags>file-manager;file-provider;abstractions;cross-platform</PackageTags>
   </PropertyGroup>
 

@@ -1,5 +1,4 @@
 using FileVault.Core;
-using FileVault.Ftp;
 using FileVault.Local;
 
 if (args.Length < 1)
@@ -8,29 +7,24 @@ if (args.Length < 1)
     return 1;
 }
 
-var resolver = new CompositeFileProviderResolver([
-    new LocalFileProviderResolver(),
-    // FTP resolver can be added here: new FtpFileProviderResolver(new FtpConnection { Host = "..." })
-]);
-
 var command = args[0].ToLowerInvariant();
 
 return command switch
 {
-    "list" => args.Length < 2 ? Usage() : await ListAsync(resolver, args[1]),
-    "mkdir" => args.Length < 3 ? Usage() : await MkdirAsync(resolver, args[1], args[2]),
-    "copy" => args.Length < 3 ? Usage() : await CopyAsync(resolver, args[1], args[2]),
-    "move" => args.Length < 3 ? Usage() : await MoveAsync(resolver, args[1], args[2]),
-    "drives" => await DrivesAsync(resolver),
+    "list" => args.Length < 2 ? Usage() : await ListAsync(args[1]),
+    "mkdir" => args.Length < 3 ? Usage() : await MkdirAsync(args[1], args[2]),
+    "copy" => args.Length < 3 ? Usage() : await CopyAsync(args[1], args[2]),
+    "move" => args.Length < 3 ? Usage() : await MoveAsync(args[1], args[2]),
+    "drives" => Drives(),
     _ => Usage(),
 };
 
-static async Task<int> ListAsync(IFileProviderResolver resolver, string path)
+static async Task<int> ListAsync(string path)
 {
-    var provider = await resolver.ResolveAsync(path);
+    var provider = CreateLocalProvider(path);
     if (provider is null)
     {
-        Console.Error.WriteLine($"Unknown path: {path}");
+        Console.Error.WriteLine($"Directory not found: {path}");
         return 1;
     }
 
@@ -43,12 +37,12 @@ static async Task<int> ListAsync(IFileProviderResolver resolver, string path)
     return 0;
 }
 
-static async Task<int> MkdirAsync(IFileProviderResolver resolver, string path, string name)
+static async Task<int> MkdirAsync(string path, string name)
 {
-    var provider = await resolver.ResolveAsync(path);
+    var provider = CreateLocalProvider(path);
     if (provider is null)
     {
-        Console.Error.WriteLine($"Unknown path: {path}");
+        Console.Error.WriteLine($"Directory not found: {path}");
         return 1;
     }
 
@@ -62,24 +56,27 @@ static async Task<int> MkdirAsync(IFileProviderResolver resolver, string path, s
     return 1;
 }
 
-static async Task<int> CopyAsync(IFileProviderResolver resolver, string sourcePath, string destPath)
+static async Task<int> CopyAsync(string sourcePath, string destPath)
 {
-    var destDir = Path.GetDirectoryName(destPath) ?? destPath;
-    var destProvider = await resolver.ResolveAsync(destDir);
+    var fullSourcePath = Path.GetFullPath(sourcePath);
+    var fullDestPath = Path.GetFullPath(destPath);
+    var destDir = Path.GetDirectoryName(fullDestPath) ?? fullDestPath;
+    var destProvider = CreateLocalProvider(destDir);
     if (destProvider is null)
     {
-        Console.Error.WriteLine($"Unknown destination: {destDir}");
+        Console.Error.WriteLine($"Destination directory not found: {destDir}");
         return 1;
     }
 
-    var sourceProvider = await resolver.ResolveAsync(Path.GetDirectoryName(sourcePath) ?? sourcePath);
+    var sourceDir = Path.GetDirectoryName(fullSourcePath) ?? fullSourcePath;
+    var sourceProvider = CreateLocalProvider(sourceDir);
     if (sourceProvider is null)
     {
-        Console.Error.WriteLine($"Unknown source: {sourcePath}");
+        Console.Error.WriteLine($"Source directory not found: {sourceDir}");
         return 1;
     }
 
-    var fileName = Path.GetFileName(sourcePath);
+    var fileName = Path.GetFileName(fullSourcePath);
     var items = await sourceProvider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync();
     var sourceItem = items.OfType<IFileItem>().FirstOrDefault(i => i.Name == fileName);
     if (sourceItem is null)
@@ -89,7 +86,7 @@ static async Task<int> CopyAsync(IFileProviderResolver resolver, string sourcePa
     }
 
     var progress = new Progress<double>(v => Console.Write($"\rCopying... {v:P0}   "));
-    var result = await destProvider.CopyFileInAsync(sourceItem, destPath, progress);
+    var result = await destProvider.CopyFileInAsync(sourceItem, fullDestPath, progress);
     Console.WriteLine();
 
     if (result.IsSuccess)
@@ -101,24 +98,27 @@ static async Task<int> CopyAsync(IFileProviderResolver resolver, string sourcePa
     return 1;
 }
 
-static async Task<int> MoveAsync(IFileProviderResolver resolver, string sourcePath, string destPath)
+static async Task<int> MoveAsync(string sourcePath, string destPath)
 {
-    var destDir = Path.GetDirectoryName(destPath) ?? destPath;
-    var destProvider = await resolver.ResolveAsync(destDir);
+    var fullSourcePath = Path.GetFullPath(sourcePath);
+    var fullDestPath = Path.GetFullPath(destPath);
+    var destDir = Path.GetDirectoryName(fullDestPath) ?? fullDestPath;
+    var destProvider = CreateLocalProvider(destDir);
     if (destProvider is null)
     {
-        Console.Error.WriteLine($"Unknown destination: {destDir}");
+        Console.Error.WriteLine($"Destination directory not found: {destDir}");
         return 1;
     }
 
-    var sourceProvider = await resolver.ResolveAsync(Path.GetDirectoryName(sourcePath) ?? sourcePath);
+    var sourceDir = Path.GetDirectoryName(fullSourcePath) ?? fullSourcePath;
+    var sourceProvider = CreateLocalProvider(sourceDir);
     if (sourceProvider is null)
     {
-        Console.Error.WriteLine($"Unknown source: {sourcePath}");
+        Console.Error.WriteLine($"Source directory not found: {sourceDir}");
         return 1;
     }
 
-    var fileName = Path.GetFileName(sourcePath);
+    var fileName = Path.GetFileName(fullSourcePath);
     var items = await sourceProvider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync();
     var sourceItem = items.OfType<IFileItem>().FirstOrDefault(i => i.Name == fileName);
     if (sourceItem is null)
@@ -128,7 +128,7 @@ static async Task<int> MoveAsync(IFileProviderResolver resolver, string sourcePa
     }
 
     var progress = new Progress<double>(v => Console.Write($"\rMoving... {v:P0}   "));
-    var result = await destProvider.MoveFileInAsync(sourceItem, destPath, progress);
+    var result = await destProvider.MoveFileInAsync(sourceItem, fullDestPath, progress);
     Console.WriteLine();
 
     if (result.IsSuccess)
@@ -140,15 +140,24 @@ static async Task<int> MoveAsync(IFileProviderResolver resolver, string sourcePa
     return 1;
 }
 
-static async Task<int> DrivesAsync(IFileProviderResolver resolver)
+static int Drives()
 {
-    var drives = await resolver.GetDrivesAsync();
+    var drives = DriveInfo.GetDrives()
+        .Where(drive => drive.IsReady)
+        .Select(drive => new LocalDriveItem(drive));
+
     foreach (var drive in drives)
     {
         var free = drive.TotalFreeSpace > 0 ? $"{drive.TotalFreeSpace / 1_073_741_824.0:F1} GB free" : "";
         Console.WriteLine($"{drive.Name,-20} {free}");
     }
     return 0;
+}
+
+static LocalFileProvider? CreateLocalProvider(string path)
+{
+    var fullPath = Path.GetFullPath(path);
+    return Directory.Exists(fullPath) ? new LocalFileProvider(fullPath) : null;
 }
 
 static int Usage()

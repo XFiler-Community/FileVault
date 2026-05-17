@@ -13,8 +13,7 @@ public class LocalFileProviderContractTests : FileProviderContractTests
     {
         _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
-        var resolver = new LocalFileProviderResolver();
-        return resolver.ResolveAsync(_tempDir)!;
+        return Task.FromResult<IFileProvider>(new LocalFileProvider(_tempDir));
     }
 
     protected override Task SeedFileAsync(string name, byte[] content)
