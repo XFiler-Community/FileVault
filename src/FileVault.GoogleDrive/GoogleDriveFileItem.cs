@@ -1,4 +1,5 @@
 using FileVault.Core;
+using Google.Apis.Download;
 using Google.Apis.Drive.v3;
 using DriveFile = Google.Apis.Drive.v3.Data.File;
 
@@ -21,11 +22,29 @@ public sealed class GoogleDriveFileItem(DriveFile file, DriveService service) : 
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
         var ms = new MemoryStream();
-        var request = service.Files.Get(file.Id);
-        await request.DownloadAsync(ms, ct).ConfigureAwait(false);
+        try
+        {
+            var download = GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType)
+                ? await ExportAsync(ms, ct).ConfigureAwait(false)
+                : await service.Files.Get(file.Id).DownloadAsync(ms, ct).ConfigureAwait(false);
+            GoogleDriveTransfer.EnsureCompleted(download);
+        }
+        catch
+        {
+            await ms.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
         ms.Position = 0;
-        long totalBytes = file.Size ?? ms.Length;
-        return (ms, totalBytes);
+        return (ms, ms.Length);
+    }
+
+    private Task<IDownloadProgress> ExportAsync(Stream destination, CancellationToken ct)
+    {
+        var exportMimeType = GoogleDriveMimeTypes.GetExportMimeType(file.MimeType)
+            ?? throw new NotSupportedException(
+                $"Google Drive item '{file.Name}' ({file.MimeType}) has no downloadable content.");
+        return service.Files.Export(file.Id, exportMimeType).DownloadAsync(destination, ct);
     }
 
     public async Task DeleteAsync(CancellationToken ct = default)

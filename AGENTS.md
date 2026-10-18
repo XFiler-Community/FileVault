@@ -246,7 +246,7 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests`.
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via `NUGET_API_KEY` secret.
 - FTP and Google Drive integration tests are **not** run in CI (require Docker / service account).
 

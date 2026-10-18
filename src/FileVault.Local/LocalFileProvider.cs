@@ -34,7 +34,7 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
     {
         try
         {
-            var resolvedName = ResolveFolderName(name);
+            var resolvedName = ResolveFolderName(LocalFileNames.Validate(name));
             var path = Path.Combine(rootPath, resolvedName);
             Directory.CreateDirectory(path);
             IFolderItem item = new SystemFolderItem(new DirectoryInfo(path), recycleBin);
@@ -50,7 +50,7 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
     {
         try
         {
-            var path = Path.Combine(rootPath, name);
+            var path = Path.Combine(rootPath, LocalFileNames.Validate(name));
             File.WriteAllText(path, string.Empty);
             IFileItem item = new SystemFileItem(new FileInfo(path));
             return Task.FromResult(FileOperationResult<IFileItem>.Success(item));
@@ -93,7 +93,7 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
         try
         {
             var dir = Path.GetDirectoryName(item.FullName)!;
-            var newPath = Path.Combine(dir, newName);
+            var newPath = Path.Combine(dir, LocalFileNames.Validate(newName));
 
             if (item is IFileItem)
                 File.Move(item.FullName, newPath);
@@ -197,19 +197,21 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
 
     public async Task<IFileItem> ResolveDestinationFileAsync(IFileItem sourceItem, bool overwrite, CancellationToken ct = default)
     {
+        var sourceName = LocalFileNames.Sanitize(sourceItem.Name);
         if (overwrite)
-            return new SystemFileItem(Path.Combine(rootPath, sourceItem.Name));
+            return new SystemFileItem(Path.Combine(rootPath, sourceName));
 
-        var name = await FindUniqueFileNameAsync(sourceItem.Name, ct).ConfigureAwait(false);
+        var name = await FindUniqueFileNameAsync(sourceName, ct).ConfigureAwait(false);
         return new SystemFileItem(Path.Combine(rootPath, name));
     }
 
     public async Task<IFolderItem> ResolveDestinationFolderAsync(IFolderItem sourceItem, bool overwrite, CancellationToken ct = default)
     {
+        var sourceName = LocalFileNames.Sanitize(sourceItem.Name);
         if (overwrite)
-            return new SystemFolderItem(new DirectoryInfo(Path.Combine(rootPath, sourceItem.Name)), recycleBin);
+            return new SystemFolderItem(new DirectoryInfo(Path.Combine(rootPath, sourceName)), recycleBin);
 
-        var name = await FindUniqueFolderNameAsync(sourceItem.Name, ct).ConfigureAwait(false);
+        var name = await FindUniqueFolderNameAsync(sourceName, ct).ConfigureAwait(false);
         return new SystemFolderItem(new DirectoryInfo(Path.Combine(rootPath, name)), recycleBin);
     }
 

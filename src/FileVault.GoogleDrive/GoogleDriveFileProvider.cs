@@ -6,7 +6,7 @@ namespace FileVault.GoogleDrive;
 
 public sealed class GoogleDriveFileProvider(DriveService service, string folderId) : IFileProvider
 {
-    private const string FolderMimeType = "application/vnd.google-apps.folder";
+    private const string FolderMimeType = GoogleDriveMimeTypes.Folder;
     private const string Scheme = "gdrive:";
     private const string ListFields = "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents)";
 
@@ -73,8 +73,9 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
             var metadata = new DriveFile { Name = name, Parents = [folderId] };
             using var empty = new MemoryStream();
             var request = service.Files.Create(metadata, empty, "text/plain");
-            request.Fields = "id, name, size, modifiedTime, parents";
-            await request.UploadAsync(ct).ConfigureAwait(false);
+            request.Fields = "id, name, mimeType, size, modifiedTime, parents";
+            var upload = await request.UploadAsync(ct).ConfigureAwait(false);
+            GoogleDriveTransfer.EnsureCompleted(upload);
             IFileItem result = request.ResponseBody is { } f
                 ? new GoogleDriveFileItem(f, service)
                 : new GoogleDrivePlaceholderFileItem(BuildPath(name));
@@ -140,7 +141,7 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
                 // Server-side copy within Google Drive
                 var copyBody = new DriveFile { Name = destFileName, Parents = [destParentId] };
                 var copyRequest = service.Files.Copy(copyBody, gdFile.File.Id);
-                copyRequest.Fields = "id, name, size, modifiedTime, parents";
+                copyRequest.Fields = "id, name, mimeType, size, modifiedTime, parents";
                 var copied = await copyRequest.ExecuteAsync(ct).ConfigureAwait(false);
                 progress.Report(1.0);
                 IFileItem result = new GoogleDriveFileItem(copied, service);
@@ -153,10 +154,11 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
                 {
                     var metadata = new DriveFile { Name = destFileName, Parents = [destParentId] };
                     var uploadRequest = service.Files.Create(metadata, src, "application/octet-stream");
-                    uploadRequest.Fields = "id, name, size, modifiedTime, parents";
+                    uploadRequest.Fields = "id, name, mimeType, size, modifiedTime, parents";
                     if (len > 0)
                         uploadRequest.ProgressChanged += p => progress.Report((double)p.BytesSent / len);
-                    await uploadRequest.UploadAsync(ct).ConfigureAwait(false);
+                    var upload = await uploadRequest.UploadAsync(ct).ConfigureAwait(false);
+                    GoogleDriveTransfer.EnsureCompleted(upload);
                     progress.Report(1.0);
                     IFileItem result = uploadRequest.ResponseBody is { } f
                         ? new GoogleDriveFileItem(f, service)
@@ -186,7 +188,7 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
                 updateRequest.AddParents = destParentId;
                 if (!string.IsNullOrEmpty(oldParents))
                     updateRequest.RemoveParents = oldParents;
-                updateRequest.Fields = "id, name, size, modifiedTime, parents";
+                updateRequest.Fields = "id, name, mimeType, size, modifiedTime, parents";
                 var updated = await updateRequest.ExecuteAsync(ct).ConfigureAwait(false);
                 progress.Report(1.0);
                 IFileItem result = new GoogleDriveFileItem(updated, service);
