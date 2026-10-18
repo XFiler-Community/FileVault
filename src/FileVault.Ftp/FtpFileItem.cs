@@ -19,11 +19,16 @@ public sealed class FtpFileItem(FtpListItem item, AsyncFtpClient client) : IFile
     public string Extension => Path.GetExtension(item.Name);
     public string NameWithoutExtension => Path.GetFileNameWithoutExtension(item.Name);
 
+    // Not FtpClient.OpenRead: a live data stream keeps the control connection busy, and copying within the
+    // same server uploads through that connection while the source is still being read.
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
-        var stream = new MemoryStream();
-        await client.DownloadStream(stream, item.FullName, token: ct).ConfigureAwait(false);
-        stream.Position = 0;
+        var stream = await TemporaryFileBuffer.CreateAsync(
+            async (destination, token) =>
+            {
+                if (!await client.DownloadStream(destination, item.FullName, token: token).ConfigureAwait(false))
+                    throw new IOException($"FTP download of '{item.FullName}' failed.");
+            }, ct).ConfigureAwait(false);
         return (stream, stream.Length);
     }
 

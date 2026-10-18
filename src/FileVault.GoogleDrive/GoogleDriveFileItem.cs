@@ -22,22 +22,17 @@ public sealed class GoogleDriveFileItem(DriveFile file, DriveService service) : 
 
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
-        var ms = new MemoryStream();
-        try
-        {
-            var download = GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType)
-                ? await ExportAsync(ms, ct).ConfigureAwait(false)
-                : await service.Files.Get(file.Id).DownloadAsync(ms, ct).ConfigureAwait(false);
-            GoogleDriveTransfer.EnsureCompleted(download);
-        }
-        catch
-        {
-            await ms.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
-
-        ms.Position = 0;
-        return (ms, ms.Length);
+        // Downloaded completely before it is handed out, so a failed transfer surfaces here and never
+        // looks like a short file to the caller (which may delete the source after copying it).
+        var stream = await TemporaryFileBuffer.CreateAsync(
+            async (destination, token) =>
+            {
+                var download = GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType)
+                    ? await ExportAsync(destination, token).ConfigureAwait(false)
+                    : await service.Files.Get(file.Id).DownloadAsync(destination, token).ConfigureAwait(false);
+                GoogleDriveTransfer.EnsureCompleted(download);
+            }, ct).ConfigureAwait(false);
+        return (stream, stream.Length);
     }
 
     private Task<IDownloadProgress> ExportAsync(Stream destination, CancellationToken ct)
