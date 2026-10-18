@@ -18,18 +18,13 @@ public sealed class SftpFileItem(ISftpFile file, SftpClient client) : IFileItem
     public string Extension => Path.GetExtension(file.Name);
     public string NameWithoutExtension => Path.GetFileNameWithoutExtension(file.Name);
 
+    // Streams straight from the server: the consumer's ReadAsync token stops the download mid-file.
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
-        var memory = new MemoryStream();
-        await Task.Run(() =>
-        {
-            using var sftp = client.OpenRead(file.FullName);
-            sftp.CopyTo(memory);
-        }, ct).ConfigureAwait(false);
-        memory.Position = 0;
-        return (memory, memory.Length);
+        var stream = await client.OpenAsync(file.FullName, FileMode.Open, FileAccess.Read, ct).ConfigureAwait(false);
+        return (stream, file.Length);
     }
 
     public async Task DeleteAsync(CancellationToken ct = default)
-        => await Task.Run(() => client.DeleteFile(file.FullName), ct).ConfigureAwait(false);
+        => await client.DeleteFileAsync(file.FullName, ct).ConfigureAwait(false);
 }

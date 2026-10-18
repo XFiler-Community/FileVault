@@ -127,7 +127,7 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
 |---|---|
 | `GetItemsAsync` | Stream via `yield return`. Folders first, then files. Apply `FileProviderFilter` via `EnumerationOptions.AttributesToSkip` (local) or manual check (cloud). |
 | `CreateFolderAsync` | Resolve name conflict before creating (append ` (2)`, ` (3)`, …). |
-| `CopyFileInAsync` | Always works cross-provider via `sourceItem.OpenReadAsync()` → upload. Same-provider may optimize server-side. |
+| `CopyFileInAsync` | Always works cross-provider via `sourceItem.OpenReadAsync()` → upload. Same-provider may optimize server-side. Write through a temp file — see [Partial files](#partial-files). Pass `ct` into every read/write so cancellation stops the transfer mid-file. |
 | `MoveFileInAsync` | Same-drive/same-provider → native move. Cross-provider → `CopyFileInAsync` + `sourceItem.DeleteAsync()`. Source path == destination on the same provider → no-op. |
 | `CopyFolderInAsync` | Return `Success(null)` if native folder copy not supported. `null` result is **not an error** — it is the signal for the orchestrator to recurse. FTP always returns `Success(null)`. |
 | `TryMoveFolderAsync` | Return `Success(null)` for cross-provider. Use native API only for same-provider moves. |
@@ -161,11 +161,19 @@ public Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, Can
 ```csharp
 (var src, long len) = await sourceItem.OpenReadAsync(ct);
 await using (src)
-await using (var dst = File.Create(destinationPath))
 {
-    await FileOperationsHelper.CopyAsync(src, len, dst, progress, ct);
+    await CopyToFileAsync(src, len, destinationPath, progress, ct); // opens and disposes the temp destination
 }
 ```
+
+### Partial files
+
+A cancelled or failed copy must leave no partial destination file, and a failed Replace must keep the old content:
+
+- Write to a temp file in the destination folder named `<name>.filevault-partial-<guid:N>` (drop `<name>` if it is over 200 chars), opened with `CreateNew`.
+- Only after the copy completed, swap it in: Local — `File.Move(temp, destination, overwrite: true)`; SFTP — `posix-rename@openssh.com`, falling back to delete + rename when the server lacks it.
+- On any exception delete the temp file (best effort, SFTP with its own short timeout since `ct` is already cancelled) and rethrow into the method's `Failure`.
+- Same-folder temp keeps the final move a rename on the same volume. Backends that commit an upload atomically (Google Drive, Yandex Disk) don't need this.
 
 ### Placeholder items
 
@@ -256,6 +264,8 @@ Do all five in the same session as the code change.
 ## Anti-patterns (from production bugs in X-Filer)
 
 - Don't dispose streams inside `FileOperationsHelper.CopyAsync` — ownership stays with the caller.
+- Don't stream straight into `destinationPath` (`File.Create`, `OpenWrite`) — a cancelled copy leaves a truncated file and destroys the original on Replace; use [Partial files](#partial-files).
+- Don't wrap synchronous SSH.NET calls in `Task.Run(..., ct)` — the token is only checked before start; use the `*Async` APIs of `SftpClient`/`SftpFileStream`.
 - Don't return `null` from `CopyFolderInAsync` as an error — `null` result means "recurse yourself".
 - Don't set `IsSystem = true` or `IsHidden = true` on placeholder items.
 - Don't check `ContainsFileAsync` against a global path — always scope to the current provider directory.

@@ -11,8 +11,7 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
     public async IAsyncEnumerable<IFileProviderItem> GetItemsAsync(FileProviderFilter filter,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var items = await Task.Run(() => client.ListDirectory(remotePath), ct).ConfigureAwait(false);
-        foreach (var item in items)
+        await foreach (var item in client.ListDirectoryAsync(remotePath, ct).ConfigureAwait(false))
         {
             if (item.Name is "." or "..")
                 continue;
@@ -32,7 +31,7 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
         {
             var resolvedName = await ResolveFolderNameAsync(name, ct).ConfigureAwait(false);
             var path = CombinePath(remotePath, resolvedName);
-            await Task.Run(() => client.CreateDirectory(path), ct).ConfigureAwait(false);
+            await client.CreateDirectoryAsync(path, ct).ConfigureAwait(false);
             IFolderItem result = new SftpPlaceholderFolderItem(path, client);
             return FileOperationResult<IFolderItem>.Success(result);
         }
@@ -47,10 +46,8 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
         try
         {
             var path = CombinePath(remotePath, name);
-            await Task.Run(() =>
-            {
-                using var stream = client.OpenWrite(path);
-            }, ct).ConfigureAwait(false);
+            var stream = await client.OpenAsync(path, FileMode.OpenOrCreate, FileAccess.Write, ct).ConfigureAwait(false);
+            await stream.DisposeAsync().ConfigureAwait(false);
             IFileItem result = new SftpPlaceholderFileItem(path);
             return FileOperationResult<IFileItem>.Success(result);
         }
@@ -72,9 +69,9 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
             {
                 ct.ThrowIfCancellationRequested();
                 if (item is IFileItem)
-                    await Task.Run(() => client.DeleteFile(item.FullName), ct).ConfigureAwait(false);
+                    await client.DeleteFileAsync(item.FullName, ct).ConfigureAwait(false);
                 else
-                    await Task.Run(() => client.DeleteDirectory(item.FullName), ct).ConfigureAwait(false);
+                    await client.DeleteDirectoryAsync(item.FullName, ct).ConfigureAwait(false);
             }
             return FileOperationResult<IReadOnlyList<IFileProviderItem>>.Success(items);
         }
@@ -89,7 +86,7 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
         try
         {
             var newPath = CombinePath(GetParentPath(item.FullName), newName);
-            await Task.Run(() => client.RenameFile(item.FullName, newPath), ct).ConfigureAwait(false);
+            await client.RenameFileAsync(item.FullName, newPath, ct).ConfigureAwait(false);
             return FileOperationResult<bool>.Success(true);
         }
         catch (Exception ex)
@@ -106,13 +103,8 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
             (var src, long len) = await sourceItem.OpenReadAsync(ct).ConfigureAwait(false);
             await using (src)
             {
-                await Task.Run(() =>
-                {
-                    using var dst = client.OpenWrite(destinationPath);
-                    src.CopyTo(dst);
-                }, ct).ConfigureAwait(false);
+                await UploadAsync(src, len, destinationPath, progress, ct).ConfigureAwait(false);
             }
-            progress.Report(1.0);
             IFileItem result = new SftpPlaceholderFileItem(destinationPath);
             return FileOperationResult<IFileItem>.Success(result);
         }
@@ -131,7 +123,7 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
             if (sourceItem is SftpFileItem sftpFile && ReferenceEquals(sftpFile.Client, client))
             {
                 if (sftpFile.FullName != destinationPath)
-                    await Task.Run(() => client.RenameFile(sftpFile.FullName, destinationPath), ct).ConfigureAwait(false);
+                    await client.RenameFileAsync(sftpFile.FullName, destinationPath, ct).ConfigureAwait(false);
                 progress.Report(1.0);
             }
             else
@@ -162,7 +154,7 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
 
         try
         {
-            await Task.Run(() => client.RenameFile(sftpFolder.FullName, destinationPath), ct).ConfigureAwait(false);
+            await client.RenameFileAsync(sftpFolder.FullName, destinationPath, ct).ConfigureAwait(false);
             progress.Report(1.0);
             IFolderItem? result = new SftpPlaceholderFolderItem(destinationPath, client);
             return FileOperationResult<IFolderItem?>.Success(result);
@@ -174,10 +166,10 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
     }
 
     public async Task<bool> ContainsFileAsync(string fileName, CancellationToken ct = default)
-        => await Task.Run(() => client.Exists(CombinePath(remotePath, fileName)), ct).ConfigureAwait(false);
+        => await client.ExistsAsync(CombinePath(remotePath, fileName), ct).ConfigureAwait(false);
 
     public async Task<bool> ContainsFolderAsync(string folderName, CancellationToken ct = default)
-        => await Task.Run(() => client.Exists(CombinePath(remotePath, folderName)), ct).ConfigureAwait(false);
+        => await client.ExistsAsync(CombinePath(remotePath, folderName), ct).ConfigureAwait(false);
 
     public async Task<IFileItem> ResolveDestinationFileAsync(IFileItem sourceItem, bool overwrite, CancellationToken ct = default)
     {
@@ -245,6 +237,76 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
         }
         while (await ContainsFolderAsync(candidate, ct).ConfigureAwait(false));
         return candidate;
+    }
+
+    // Upload to a temp file next to the destination and swap it in only when complete:
+    // a cancelled or failed upload leaves neither a truncated file nor a damaged original (Replace).
+    private async Task UploadAsync(Stream src, long totalBytes, string destinationPath,
+        IProgress<double> progress, CancellationToken ct)
+    {
+        var tempPath = GetPartialPath(destinationPath);
+        try
+        {
+            var dst = await client.OpenAsync(tempPath, FileMode.CreateNew, FileAccess.Write, ct).ConfigureAwait(false);
+            await using (dst)
+            {
+                await FileOperationsHelper.CopyAsync(src, totalBytes, dst, progress, ct).ConfigureAwait(false);
+            }
+            await ReplaceAsync(tempPath, destinationPath, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await TryDeleteFileAsync(tempPath).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task ReplaceAsync(string sourcePath, string destinationPath, CancellationToken ct)
+    {
+        if (!await client.ExistsAsync(destinationPath, ct).ConfigureAwait(false))
+        {
+            await client.RenameFileAsync(sourcePath, destinationPath, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // Plain SFTP rename refuses to overwrite; posix-rename (OpenSSH extension) replaces atomically.
+        try
+        {
+            await Task.Run(() => client.RenameFile(sourcePath, destinationPath, isPosix: true), ct).ConfigureAwait(false);
+        }
+        catch (NotSupportedException)
+        {
+            await client.DeleteFileAsync(destinationPath, ct).ConfigureAwait(false);
+            await client.RenameFileAsync(sourcePath, destinationPath, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task TryDeleteFileAsync(string path)
+    {
+        // The operation token is usually already cancelled here; cleanup gets its own short deadline.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await client.DeleteFileAsync(path, cts.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The original error is what the caller needs; a leftover temp file is the lesser problem.
+        }
+    }
+
+    private static string GetPartialPath(string destinationPath)
+    {
+        var name = GetFileName(destinationPath);
+        // Keep the temp name within the common 255-char file name limit.
+        var prefix = name.Length <= 200 ? name : string.Empty;
+        return CombinePath(GetParentPath(destinationPath), $"{prefix}.filevault-partial-{Guid.NewGuid():N}");
+    }
+
+    private static string GetFileName(string path)
+    {
+        var trimmed = path.TrimEnd('/');
+        return trimmed[(trimmed.LastIndexOf('/') + 1)..];
     }
 
     private static string CombinePath(string parent, string child)

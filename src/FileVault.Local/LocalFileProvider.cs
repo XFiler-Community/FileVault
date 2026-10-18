@@ -115,9 +115,8 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
         {
             (var src, long len) = await sourceItem.OpenReadAsync(ct).ConfigureAwait(false);
             await using (src)
-            await using (var dst = File.Create(destinationPath))
             {
-                await FileOperationsHelper.CopyAsync(src, len, dst, progress, ct).ConfigureAwait(false);
+                await CopyToFileAsync(src, len, destinationPath, progress, ct).ConfigureAwait(false);
             }
             IFileItem result = new SystemFileItem(new FileInfo(destinationPath));
             return FileOperationResult<IFileItem>.Success(result);
@@ -275,6 +274,49 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
             Path.GetPathRoot(path2),
             StringComparison.OrdinalIgnoreCase);
 
+    // The copy goes to a temp file next to the destination and replaces it only when complete:
+    // a cancelled or failed copy leaves neither a truncated file nor a damaged original (Replace).
+    private static async Task CopyToFileAsync(Stream src, long totalBytes, string destinationPath,
+        IProgress<double>? progress, CancellationToken ct)
+    {
+        var tempPath = GetPartialPath(destinationPath);
+        try
+        {
+            await using (var dst = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                             bufferSize: 4096, FileOptions.Asynchronous))
+            {
+                await FileOperationsHelper.CopyAsync(src, totalBytes, dst, progress, ct).ConfigureAwait(false);
+            }
+            File.Move(tempPath, destinationPath, overwrite: true);
+        }
+        catch
+        {
+            TryDeleteFile(tempPath);
+            throw;
+        }
+    }
+
+    private static string GetPartialPath(string destinationPath)
+    {
+        var name = Path.GetFileName(destinationPath);
+        // Keep the temp name within the 255-char file name limit.
+        var prefix = name.Length <= 200 ? name : string.Empty;
+        return Path.Combine(Path.GetDirectoryName(destinationPath) ?? string.Empty,
+            $"{prefix}.filevault-partial-{Guid.NewGuid():N}");
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch
+        {
+            // The original error is what the caller needs; a leftover temp file is the lesser problem.
+        }
+    }
+
     private static async Task CopyDirectoryAsync(string source, string dest, CancellationToken ct)
     {
         Directory.CreateDirectory(dest);
@@ -283,8 +325,7 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
         {
             ct.ThrowIfCancellationRequested();
             await using var src = File.OpenRead(file);
-            await using var dst = File.Create(Path.Combine(dest, Path.GetFileName(file)));
-            await src.CopyToAsync(dst, ct).ConfigureAwait(false);
+            await CopyToFileAsync(src, src.Length, Path.Combine(dest, Path.GetFileName(file)), null, ct).ConfigureAwait(false);
         }
 
         foreach (var dir in Directory.EnumerateDirectories(source))
