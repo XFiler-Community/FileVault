@@ -15,5 +15,6 @@
     <Project Path="tests/FileVault.Ftp.Tests/FileVault.Ftp.Tests.csproj" />
     <Project Path="tests/FileVault.Local.Tests/FileVault.Local.Tests.csproj" />
     <Project Path="tests/FileVault.GoogleDrive.Tests/FileVault.GoogleDrive.Tests.csproj" />
+    <Project Path="tests/FileVault.YandexDisk.Tests/FileVault.YandexDisk.Tests.csproj" />
   </Folder>
 </Solution>

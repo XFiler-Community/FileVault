@@ -22,6 +22,7 @@ tests/
   FileVault.Local.Tests/
   FileVault.Ftp.Tests/
   FileVault.GoogleDrive.Tests/
+  FileVault.YandexDisk.Tests/  ← unit tests on a fake IDiskApi
 ```
 
 ---
@@ -127,7 +128,7 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
 | `GetItemsAsync` | Stream via `yield return`. Folders first, then files. Apply `FileProviderFilter` via `EnumerationOptions.AttributesToSkip` (local) or manual check (cloud). |
 | `CreateFolderAsync` | Resolve name conflict before creating (append ` (2)`, ` (3)`, …). |
 | `CopyFileInAsync` | Always works cross-provider via `sourceItem.OpenReadAsync()` → upload. Same-provider may optimize server-side. |
-| `MoveFileInAsync` | Same-drive/same-provider → native move. Cross-provider → `CopyFileInAsync` + `sourceItem.DeleteAsync()`. |
+| `MoveFileInAsync` | Same-drive/same-provider → native move. Cross-provider → `CopyFileInAsync` + `sourceItem.DeleteAsync()`. Source path == destination on the same provider → no-op. |
 | `CopyFolderInAsync` | Return `Success(null)` if native folder copy not supported. `null` result is **not an error** — it is the signal for the orchestrator to recurse. FTP always returns `Success(null)`. |
 | `TryMoveFolderAsync` | Return `Success(null)` for cross-provider. Use native API only for same-provider moves. |
 | `DeleteAsync` | `toRecycleBin: true` → backend trash. No trash → `Failure(NotSupportedException)` before touching any item; **never** silently delete permanently. Local gets its trash via optional `ILocalRecycleBin`. |
@@ -246,7 +247,7 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler).
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via `NUGET_API_KEY` secret.
 - FTP and Google Drive integration tests are **not** run in CI (require Docker / service account).
 
@@ -259,5 +260,7 @@ Do all five in the same session as the code change.
 - Don't set `IsSystem = true` or `IsHidden = true` on placeholder items.
 - Don't check `ContainsFileAsync` against a global path — always scope to the current provider directory.
 - Don't use `CopyAsync` in `TryMoveFolder` for same-provider moves — use the native move API.
+- Don't decide "same provider" by item type alone — compare the client/account instance the item was created with (`ReferenceEquals(item.Client, client)`); otherwise a native copy/move runs on the wrong server or account.
+- Don't swallow errors in `Contains*Async` — only "not found" means `false`; a network error answered as `false` makes the caller reuse an existing name and the upload overwrites it.
 - Don't duplicate `OnSameDrive` — one function `OnSameDrive(string path1, string path2)` per provider that needs it.
 - Don't add `async Task` without an `await` — use `Task.FromResult` for synchronous returns.

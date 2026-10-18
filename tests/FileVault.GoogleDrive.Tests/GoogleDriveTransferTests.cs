@@ -111,6 +111,52 @@ public class GoogleDriveTransferTests
         Assert.That(requests, Is.Zero);
     }
 
+    [Test]
+    public async Task CopyFileInAsync_OtherAccount_DownloadsAndUploads()
+    {
+        var targetRequests = new List<HttpRequestMessage>();
+        using var sourceService = CreateService(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) });
+        using var targetService = CreateService(request =>
+        {
+            targetRequests.Add(request);
+            return request.Method == HttpMethod.Post
+                ? ResumableSession()
+                : Json(HttpStatusCode.OK, """{"id":"new-id","name":"photo.jpg","mimeType":"image/jpeg","size":"3"}""");
+        });
+        var provider = new GoogleDriveFileProvider(targetService, "root");
+        var source = new GoogleDriveFileItem(
+            new DriveFile { Id = "src-id", Name = "photo.jpg", MimeType = "image/jpeg", Size = 3 }, sourceService);
+
+        var result = await provider.CopyFileInAsync(source, "gdrive:root/photo.jpg", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(targetRequests.Select(r => r.RequestUri!.AbsolutePath),
+            Has.None.Contains("/copy"), "server-side copy would look up src-id in the wrong account");
+        Assert.That(targetRequests.Select(r => r.RequestUri!.AbsolutePath), Has.Some.StartsWith("/upload/"));
+    }
+
+    [Test]
+    public async Task TryMoveFolderAsync_OtherAccount_LetsOrchestratorRecurse()
+    {
+        var targetRequests = 0;
+        using var sourceService = CreateService(_ => Json(HttpStatusCode.OK, "{}"));
+        using var targetService = CreateService(_ =>
+        {
+            targetRequests++;
+            return Json(HttpStatusCode.OK, "{}");
+        });
+        var provider = new GoogleDriveFileProvider(targetService, "root");
+        var folder = new GoogleDriveFolderItem(
+            new DriveFile { Id = "folder-id", Name = "Photos", MimeType = "application/vnd.google-apps.folder" },
+            sourceService);
+
+        var result = await provider.TryMoveFolderAsync(folder, "gdrive:root/Photos", new Progress<double>());
+
+        Assert.That(result.IsSuccess && result.Result is null, Is.True);
+        Assert.That(targetRequests, Is.Zero);
+    }
+
     private static DriveService CreateService(Func<HttpRequestMessage, HttpResponseMessage> respond)
         => new(new BaseClientService.Initializer
         {

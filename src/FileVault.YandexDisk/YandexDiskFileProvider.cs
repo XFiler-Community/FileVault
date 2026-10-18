@@ -1,3 +1,4 @@
+using System.Net;
 using Egorozh.YandexDisk.Client;
 using Egorozh.YandexDisk.Client.Clients;
 using Egorozh.YandexDisk.Client.Protocol;
@@ -119,7 +120,7 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IF
     {
         try
         {
-            if (sourceItem is YandexDiskFileItem ydItem)
+            if (sourceItem is YandexDiskFileItem ydItem && IsSameAccount(ydItem.Api))
             {
                 await api.Commands.CopyAndWaitAsync(
                     new CopyFileRequest { From = ydItem.FullName, Path = destinationPath, Overwrite = true }, ct)
@@ -149,7 +150,7 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IF
     {
         try
         {
-            if (sourceItem is YandexDiskFileItem ydItem)
+            if (sourceItem is YandexDiskFileItem ydItem && IsSameAccount(ydItem.Api))
             {
                 await api.Commands.MoveAndWaitAsync(
                     new MoveFileRequest { From = ydItem.FullName, Path = destinationPath, Overwrite = true }, ct)
@@ -175,7 +176,7 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IF
     public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
-        if (sourceItem is not YandexDiskFolderItem ydFolder)
+        if (sourceItem is not YandexDiskFolderItem ydFolder || !IsSameAccount(ydFolder.Api))
             return FileOperationResult<IFolderItem?>.Success(null);
 
         try
@@ -196,7 +197,7 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IF
     public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
-        if (sourceItem is not YandexDiskFolderItem ydFolder)
+        if (sourceItem is not YandexDiskFolderItem ydFolder || !IsSameAccount(ydFolder.Api))
             return FileOperationResult<IFolderItem?>.Success(null);
 
         try
@@ -215,32 +216,29 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IF
     }
 
     public async Task<bool> ContainsFileAsync(string fileName, CancellationToken ct = default)
+        => await GetResourceTypeAsync(fileName, ct).ConfigureAwait(false) == ResourceType.File;
+
+    public async Task<bool> ContainsFolderAsync(string folderName, CancellationToken ct = default)
+        => await GetResourceTypeAsync(folderName, ct).ConfigureAwait(false) == ResourceType.Dir;
+
+    // Only "not found" means the name is free. Any other error must propagate: answering "free" on a
+    // network failure makes the caller pick the existing name, and uploads here overwrite.
+    private async Task<ResourceType?> GetResourceTypeAsync(string name, CancellationToken ct)
     {
         try
         {
-            var path = CombinePath(remotePath, fileName);
+            var path = CombinePath(remotePath, name);
             var resource = await api.MetaInfo.GetInfoAsync(new ResourceRequest { Path = path }, ct).ConfigureAwait(false);
-            return resource.Type == ResourceType.File;
+            return resource.Type;
         }
-        catch
+        catch (YandexApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
-            return false;
+            return null;
         }
     }
 
-    public async Task<bool> ContainsFolderAsync(string folderName, CancellationToken ct = default)
-    {
-        try
-        {
-            var path = CombinePath(remotePath, folderName);
-            var resource = await api.MetaInfo.GetInfoAsync(new ResourceRequest { Path = path }, ct).ConfigureAwait(false);
-            return resource.Type == ResourceType.Dir;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    // Items keep the IDiskApi of their account; the same type alone could belong to another account.
+    private bool IsSameAccount(IDiskApi itemApi) => ReferenceEquals(itemApi, api);
 
     public async Task<IFileItem> ResolveDestinationFileAsync(IFileItem sourceItem, bool overwrite, CancellationToken ct = default)
     {

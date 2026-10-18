@@ -126,9 +126,12 @@ public sealed class FtpFileProvider(AsyncFtpClient client, string remotePath) : 
     {
         try
         {
-            if (sourceItem is FtpFileItem ftpFile && ftpFile.FullName != destinationPath)
+            // Same type is not enough: an item from another server must go through copy + delete.
+            // Moving a file onto itself must be a no-op, not copy + delete of the only copy.
+            if (sourceItem is FtpFileItem ftpFile && ReferenceEquals(ftpFile.Client, client))
             {
-                await client.MoveFile(ftpFile.FullName, destinationPath, FtpRemoteExists.Overwrite, ct).ConfigureAwait(false);
+                if (ftpFile.FullName != destinationPath)
+                    await client.MoveFile(ftpFile.FullName, destinationPath, FtpRemoteExists.Overwrite, ct).ConfigureAwait(false);
                 progress.Report(1.0);
             }
             else

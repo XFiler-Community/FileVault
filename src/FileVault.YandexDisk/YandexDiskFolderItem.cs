@@ -6,6 +6,8 @@ namespace FileVault.YandexDisk;
 
 public sealed class YandexDiskFolderItem(Resource resource, IDiskApi api) : IFolderItem
 {
+    internal IDiskApi Api => api;
+
     public string Name => resource.Name;
     public string FullName => resource.Path;
     public bool IsHidden => resource.Name.StartsWith('.');

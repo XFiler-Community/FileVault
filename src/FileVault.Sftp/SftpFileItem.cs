@@ -6,6 +6,8 @@ namespace FileVault.Sftp;
 
 public sealed class SftpFileItem(ISftpFile file, SftpClient client) : IFileItem
 {
+    internal SftpClient Client => client;
+
     public string Name => file.Name;
     public string FullName => file.FullName;
     public bool IsHidden => file.Name.StartsWith('.');

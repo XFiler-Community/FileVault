@@ -7,6 +7,8 @@ namespace FileVault.YandexDisk;
 
 public sealed class YandexDiskFileItem(Resource resource, IDiskApi api) : IFileItem
 {
+    internal IDiskApi Api => api;
+
     public string Name => resource.Name;
     public string FullName => resource.Path;
     public bool IsHidden => resource.Name.StartsWith('.');

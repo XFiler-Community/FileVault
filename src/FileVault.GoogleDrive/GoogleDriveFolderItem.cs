@@ -7,6 +7,7 @@ namespace FileVault.GoogleDrive;
 public sealed class GoogleDriveFolderItem(DriveFile file, DriveService service) : IFolderItem
 {
     internal DriveFile File => file;
+    internal DriveService Service => service;
 
     public string Name => file.Name;
     public string FullName => $"gdrive:{file.Id}";

@@ -127,9 +127,11 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
     {
         try
         {
-            if (sourceItem is SftpFileItem sftpFile && ReferenceEquals(sftpFile, sourceItem))
+            // Same type is not enough: an item from another server must go through copy + delete.
+            if (sourceItem is SftpFileItem sftpFile && ReferenceEquals(sftpFile.Client, client))
             {
-                await Task.Run(() => client.RenameFile(sftpFile.FullName, destinationPath), ct).ConfigureAwait(false);
+                if (sftpFile.FullName != destinationPath)
+                    await Task.Run(() => client.RenameFile(sftpFile.FullName, destinationPath), ct).ConfigureAwait(false);
                 progress.Report(1.0);
             }
             else

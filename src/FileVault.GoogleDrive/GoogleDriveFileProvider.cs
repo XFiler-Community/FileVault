@@ -136,7 +136,7 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
         {
             var (destParentId, destFileName) = ParsePath(destinationPath);
 
-            if (sourceItem is GoogleDriveFileItem gdFile)
+            if (sourceItem is GoogleDriveFileItem gdFile && IsSameAccount(gdFile.Service))
             {
                 // Server-side copy within Google Drive
                 var copyBody = new DriveFile { Name = destFileName, Parents = [destParentId] };
@@ -180,7 +180,7 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
         {
             var (destParentId, destFileName) = ParsePath(destinationPath);
 
-            if (sourceItem is GoogleDriveFileItem gdFile)
+            if (sourceItem is GoogleDriveFileItem gdFile && IsSameAccount(gdFile.Service))
             {
                 // Server-side move: update parents + rename in one request
                 var oldParents = string.Join(",", gdFile.File.Parents ?? []);
@@ -217,7 +217,7 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
     public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
-        if (sourceItem is not GoogleDriveFolderItem gdFolder)
+        if (sourceItem is not GoogleDriveFolderItem gdFolder || !IsSameAccount(gdFolder.Service))
             return FileOperationResult<IFolderItem?>.Success(null);
 
         try
@@ -328,6 +328,9 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
         while (await ContainsFolderAsync(candidate, ct).ConfigureAwait(false));
         return candidate;
     }
+
+    // Items keep the DriveService of their account; the same type alone could belong to another account.
+    private bool IsSameAccount(DriveService itemService) => ReferenceEquals(itemService, service);
 
     // Builds "gdrive:<folderId>/<name>" — used as FullName for placeholder items.
     private string BuildPath(string name) => $"{Scheme}{folderId}/{name}";

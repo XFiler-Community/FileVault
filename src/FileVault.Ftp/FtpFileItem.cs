@@ -5,6 +5,8 @@ namespace FileVault.Ftp;
 
 public sealed class FtpFileItem(FtpListItem item, AsyncFtpClient client) : IFileItem
 {
+    internal AsyncFtpClient Client => client;
+
     public string Name => item.Name;
     public string FullName => item.FullName;
     public bool IsHidden => item.Name.StartsWith('.');
