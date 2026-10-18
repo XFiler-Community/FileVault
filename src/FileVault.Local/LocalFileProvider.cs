@@ -157,6 +157,10 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
     public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
+        // Cross-provider source (cloud, FTP, SFTP): no local path to copy from — let the orchestrator recurse.
+        if (sourceItem is not SystemFolderItem)
+            return FileOperationResult<IFolderItem?>.Success(null);
+
         try
         {
             await CopyDirectoryAsync(sourceItem.FullName, destinationPath, ct).ConfigureAwait(false);
@@ -175,7 +179,7 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
     {
         try
         {
-            if (!OnSameDrive(sourceItem.FullName, destinationPath))
+            if (sourceItem is not SystemFolderItem || !OnSameDrive(sourceItem.FullName, destinationPath))
                 return Task.FromResult(FileOperationResult<IFolderItem?>.Success(null));
 
             Directory.Move(sourceItem.FullName, destinationPath);
