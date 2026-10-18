@@ -10,6 +10,11 @@ public interface IFileProvider
     Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default);
     Task<FileOperationResult<IFileItem>> CreateEmptyTextFileAsync(string name, CancellationToken ct = default);
 
+    /// <summary>
+    /// <paramref name="toRecycleBin"/> = true moves items to the backend's trash. A provider without a trash
+    /// returns Failure(<see cref="NotSupportedException"/>) and leaves the items untouched — it never
+    /// falls back to permanent deletion, so the caller can ask the user first.
+    /// </summary>
     Task<FileOperationResult<IReadOnlyList<IFileProviderItem>>> DeleteAsync(
         IReadOnlyList<IFileProviderItem> items, bool toRecycleBin, CancellationToken ct = default);
 

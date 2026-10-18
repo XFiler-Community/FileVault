@@ -50,6 +50,14 @@ await foreach (var item in provider.GetItemsAsync(FileProviderFilter.Default))
 }
 ```
 
+Recycle bin support is opt-in: pass an `ILocalRecycleBin` (e.g. backed by the OS Trash / Recycle Bin API).
+It flows to every `SystemFolderItem.CreateProvider()` below that root. Without it,
+`DeleteAsync(..., toRecycleBin: true)` fails with `NotSupportedException` and deletes nothing.
+
+```csharp
+var provider = new LocalFileProvider("/home/user/Documents", recycleBin);
+```
+
 ### FTP
 
 ```csharp
@@ -173,8 +181,11 @@ var copyResult = await destProvider.CopyFileInAsync(
 // Move a file (same-drive: native move; cross-provider: copy + delete)
 await destProvider.MoveFileInAsync(sourceFileItem, destPath, progress);
 
-// Delete
-await provider.DeleteAsync([item], toRecycleBin: false);
+// Delete: toRecycleBin: true moves to the backend's trash (Local with ILocalRecycleBin, Yandex Disk,
+// Google Drive); other providers return Failure(NotSupportedException) and delete nothing.
+var deleted = await provider.DeleteAsync([item], toRecycleBin: true);
+if (deleted.Exception is NotSupportedException)
+    deleted = await provider.DeleteAsync([item], toRecycleBin: false); // permanent — confirm with the user first
 
 // Rename
 await provider.RenameAsync(item, "new-name.txt");

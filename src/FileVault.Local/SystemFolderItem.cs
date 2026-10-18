@@ -5,10 +5,12 @@ namespace FileVault.Local;
 public sealed class SystemFolderItem : IFolderItem, IOpenableItem
 {
     private readonly DirectoryInfo _dirInfo;
+    private readonly ILocalRecycleBin? _recycleBin;
 
-    public SystemFolderItem(DirectoryInfo dirInfo)
+    public SystemFolderItem(DirectoryInfo dirInfo, ILocalRecycleBin? recycleBin = null)
     {
         _dirInfo = dirInfo;
+        _recycleBin = recycleBin;
         IsHidden = (dirInfo.Attributes & FileAttributes.Hidden) != 0;
         IsSystem = (dirInfo.Attributes & FileAttributes.System) != 0;
         ChangedDate = dirInfo.LastWriteTime;
@@ -21,7 +23,7 @@ public sealed class SystemFolderItem : IFolderItem, IOpenableItem
     public DateTimeOffset ChangedDate { get; }
     public long? Size => null;
 
-    public IFileProvider CreateProvider() => new LocalFileProvider(_dirInfo.FullName);
+    public IFileProvider CreateProvider() => new LocalFileProvider(_dirInfo.FullName, _recycleBin);
 
     public void Open()
     {

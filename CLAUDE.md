@@ -530,8 +530,9 @@ public SystemFileItem(string filePath)
 ### IFileOperations (опциональная зависимость для Recycle Bin)
 
 В X-Filer используется пакет `XFiler.FileOperations.Abstractions` / `XFiler.FileOperations.Windows`.
-В FileVault можно аналогично иметь `FileVault.Local.RecycleBin` как опциональный sub-пакет.
-Без него `Delete(toRecycleBin: true)` работает как `toRecycleBin: false`.
+В FileVault это опциональная зависимость `ILocalRecycleBin` (передаётся в `LocalFileProvider`,
+`SystemFolderItem`, `LocalDriveItem`); реализацию даёт приложение. Без неё `Delete(toRecycleBin: true)`
+возвращает Failure(`NotSupportedException`) и ничего не удаляет — никогда не тихое безвозвратное удаление.
 
 ---
 

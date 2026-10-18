@@ -64,6 +64,9 @@ public sealed class FtpFileProvider(AsyncFtpClient client, string remotePath) : 
     {
         try
         {
+            if (toRecycleBin)
+                throw new NotSupportedException("Recycle bin is not available for this location.");
+
             foreach (var item in items)
             {
                 ct.ThrowIfCancellationRequested();

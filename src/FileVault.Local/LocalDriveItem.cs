@@ -6,10 +6,12 @@ public sealed class LocalDriveItem : IDriveItem
 {
     private readonly DriveInfo _drive;
     private readonly DirectoryInfo _dirInfo;
+    private readonly ILocalRecycleBin? _recycleBin;
 
-    public LocalDriveItem(DriveInfo drive)
+    public LocalDriveItem(DriveInfo drive, ILocalRecycleBin? recycleBin = null)
     {
         _drive = drive;
+        _recycleBin = recycleBin;
         _dirInfo = drive.RootDirectory;
         TotalSize = drive.IsReady ? drive.TotalSize : 0;
         TotalFreeSpace = drive.IsReady ? drive.TotalFreeSpace : 0;
@@ -26,7 +28,7 @@ public sealed class LocalDriveItem : IDriveItem
     public long TotalFreeSpace { get; }
     public bool IsUserVisible { get; }
 
-    public IFileProvider CreateProvider() => new LocalFileProvider(_dirInfo.FullName);
+    public IFileProvider CreateProvider() => new LocalFileProvider(_dirInfo.FullName, _recycleBin);
 
     private static bool ComputeIsUserVisible(string name)
     {

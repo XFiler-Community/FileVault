@@ -130,6 +130,7 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
 | `MoveFileInAsync` | Same-drive/same-provider → native move. Cross-provider → `CopyFileInAsync` + `sourceItem.DeleteAsync()`. |
 | `CopyFolderInAsync` | Return `Success(null)` if native folder copy not supported. `null` result is **not an error** — it is the signal for the orchestrator to recurse. FTP always returns `Success(null)`. |
 | `TryMoveFolderAsync` | Return `Success(null)` for cross-provider. Use native API only for same-provider moves. |
+| `DeleteAsync` | `toRecycleBin: true` → backend trash. No trash → `Failure(NotSupportedException)` before touching any item; **never** silently delete permanently. Local gets its trash via optional `ILocalRecycleBin`. |
 | `ContainsFileAsync` | Check by name **within the provider's current directory** — do not check a global path. |
 | `ResolveDestinationFileAsync` | Return a placeholder with the correct `FullName`; do **not** create the file on disk. Use the `{baseName} ({index}){ext}` pattern starting at index 2. |
 

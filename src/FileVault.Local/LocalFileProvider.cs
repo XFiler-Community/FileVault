@@ -2,7 +2,7 @@ using FileVault.Core;
 
 namespace FileVault.Local;
 
-public sealed class LocalFileProvider(string rootPath) : IFileProvider
+public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycleBin = null) : IFileProvider
 {
     public string Name => Path.GetFileName(rootPath.TrimEnd(Path.DirectorySeparatorChar)) is { Length: > 0 } n ? n : rootPath;
     public string FullName => rootPath;
@@ -18,7 +18,7 @@ public sealed class LocalFileProvider(string rootPath) : IFileProvider
         foreach (var dir in Directory.EnumerateDirectories(rootPath, "*", options))
         {
             ct.ThrowIfCancellationRequested();
-            yield return new SystemFolderItem(new DirectoryInfo(dir));
+            yield return new SystemFolderItem(new DirectoryInfo(dir), recycleBin);
         }
 
         foreach (var file in Directory.EnumerateFiles(rootPath, "*", options))
@@ -37,7 +37,7 @@ public sealed class LocalFileProvider(string rootPath) : IFileProvider
             var resolvedName = ResolveFolderName(name);
             var path = Path.Combine(rootPath, resolvedName);
             Directory.CreateDirectory(path);
-            IFolderItem item = new SystemFolderItem(new DirectoryInfo(path));
+            IFolderItem item = new SystemFolderItem(new DirectoryInfo(path), recycleBin);
             return Task.FromResult(FileOperationResult<IFolderItem>.Success(item));
         }
         catch (Exception ex)
@@ -66,13 +66,19 @@ public sealed class LocalFileProvider(string rootPath) : IFileProvider
     {
         try
         {
+            if (toRecycleBin && recycleBin is null)
+                throw new NotSupportedException("Recycle bin is not available for this location.");
+
             foreach (var item in items)
             {
                 ct.ThrowIfCancellationRequested();
-                if (item is IFileItem)
-                    File.Delete(item.FullName);
-                else
+                var isDirectory = item is not IFileItem;
+                if (toRecycleBin)
+                    recycleBin!.MoveToRecycleBin(item.FullName, isDirectory);
+                else if (isDirectory)
                     Directory.Delete(item.FullName, recursive: true);
+                else
+                    File.Delete(item.FullName);
             }
             return Task.FromResult(FileOperationResult<IReadOnlyList<IFileProviderItem>>.Success(items));
         }
@@ -155,7 +161,7 @@ public sealed class LocalFileProvider(string rootPath) : IFileProvider
         {
             await CopyDirectoryAsync(sourceItem.FullName, destinationPath, ct).ConfigureAwait(false);
             progress.Report(1.0);
-            IFolderItem? result = new SystemFolderItem(new DirectoryInfo(destinationPath));
+            IFolderItem? result = new SystemFolderItem(new DirectoryInfo(destinationPath), recycleBin);
             return FileOperationResult<IFolderItem?>.Success(result);
         }
         catch (Exception ex)
@@ -174,7 +180,7 @@ public sealed class LocalFileProvider(string rootPath) : IFileProvider
 
             Directory.Move(sourceItem.FullName, destinationPath);
             progress.Report(1.0);
-            IFolderItem? result = new SystemFolderItem(new DirectoryInfo(destinationPath));
+            IFolderItem? result = new SystemFolderItem(new DirectoryInfo(destinationPath), recycleBin);
             return Task.FromResult(FileOperationResult<IFolderItem?>.Success(result));
         }
         catch (Exception ex)
@@ -201,10 +207,10 @@ public sealed class LocalFileProvider(string rootPath) : IFileProvider
     public async Task<IFolderItem> ResolveDestinationFolderAsync(IFolderItem sourceItem, bool overwrite, CancellationToken ct = default)
     {
         if (overwrite)
-            return new SystemFolderItem(new DirectoryInfo(Path.Combine(rootPath, sourceItem.Name)));
+            return new SystemFolderItem(new DirectoryInfo(Path.Combine(rootPath, sourceItem.Name)), recycleBin);
 
         var name = await FindUniqueFolderNameAsync(sourceItem.Name, ct).ConfigureAwait(false);
-        return new SystemFolderItem(new DirectoryInfo(Path.Combine(rootPath, name)));
+        return new SystemFolderItem(new DirectoryInfo(Path.Combine(rootPath, name)), recycleBin);
     }
 
     private async Task<string> FindUniqueFileNameAsync(string fileName, CancellationToken ct)
