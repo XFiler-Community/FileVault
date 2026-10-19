@@ -348,6 +348,188 @@ public class GitHubRepositoryTests
             Assert.That((await provider.CreateFolderAsync(name)).IsSuccess, Is.False, name);
     }
 
+    // ── Several files at once ───────────────────────────────────────────────
+
+    [Test]
+    public async Task CommitAsync_WritesRestoresAndDeletes_AsOneCommit()
+    {
+        var first = _github.Commit(new Dictionary<string, byte[]?>
+        {
+            ["notes.md"] = Text("one"),
+            ["old.md"] = Text("old"),
+            ["gone.md"] = Text("gone")
+        });
+        _github.Commit(new Dictionary<string, byte[]?> { ["notes.md"] = Text("two"), ["old.md"] = Text("changed") });
+        var earlier = (await _repository.FindAsync("old.md", await _repository.GetSnapshotAsync(first)))!;
+        var head = await _repository.GetHeadAsync();
+        var before = _github.CommitCount;
+
+        var result = await _repository.CommitAsync([
+            GitHubFileEdit.Write("notes.md", Text("three"), (await _repository.FindAsync("notes.md", head))!.Sha),
+            GitHubFileEdit.Write("new/added.md", Text("new"), null),
+            GitHubFileEdit.Restore("old.md", earlier, (await _repository.FindAsync("old.md", head))!.Sha),
+            GitHubFileEdit.Delete("gone.md", (await _repository.FindAsync("gone.md", head))!.Sha)
+        ], "Several files");
+
+        Assert.That(result.Status, Is.EqualTo(GitHubCommitStatus.Committed));
+        Assert.That(result.CommitSha, Is.EqualTo(_github.Head()));
+        Assert.That(_github.CommitCount - before, Is.EqualTo(1));
+        Assert.That(_github.Read("notes.md"), Is.EqualTo(Text("three")));
+        Assert.That(_github.Read("new/added.md"), Is.EqualTo(Text("new")));
+        Assert.That(_github.Read("old.md"), Is.EqualTo(Text("old")));
+        Assert.That(_github.Read("gone.md"), Is.Null);
+    }
+
+    [Test]
+    public async Task CommitAsync_FileNotAsExpected_WritesNothing_ListsIt()
+    {
+        _github.Commit(new Dictionary<string, byte[]?> { ["a.md"] = Text("a"), ["b.md"] = Text("b") });
+        var head = await _repository.GetHeadAsync();
+        var a = (await _repository.FindAsync("a.md", head))!.Sha;
+        _github.Commit("b.md", "changed by the agent", author: "Claude");
+        var before = _github.Head();
+
+        var result = await _repository.CommitAsync([
+            GitHubFileEdit.Write("a.md", Text("mine"), a),
+            GitHubFileEdit.Write("b.md", Text("mine"), (await _repository.FindAsync("b.md", head))!.Sha),
+            GitHubFileEdit.Write("c.md", Text("mine"), null)
+        ], "Mine");
+
+        Assert.That(result.Status, Is.EqualTo(GitHubCommitStatus.ChangedMeanwhile));
+        Assert.That(result.Paths, Is.EqualTo(new[] { "b.md" }));
+        Assert.That(_github.Head(), Is.EqualTo(before));
+    }
+
+    [Test]
+    public async Task CommitAsync_ContentForLfsPath_IsRefused()
+    {
+        _github.Commit(".gitattributes", "*.psd filter=lfs diff=lfs merge=lfs -text\n");
+
+        var result = await _repository.CommitAsync([GitHubFileEdit.Write("cover.psd", [1, 2], null)], "Picture");
+
+        Assert.That(result.Status, Is.EqualTo(GitHubCommitStatus.StoredInLfs));
+        Assert.That(result.Paths, Is.EqualTo(new[] { "cover.psd" }));
+    }
+
+    [Test]
+    public async Task Diff_ReadsOnlyChangedFolders_FolderAddedShowsItsFiles()
+    {
+        var first = _github.Commit(new Dictionary<string, byte[]?>
+        {
+            ["keep/big/a.md"] = Text("a"),
+            ["notes.md"] = Text("one"),
+            ["gone.md"] = Text("gone")
+        });
+        var second = _github.Commit(new Dictionary<string, byte[]?>
+        {
+            ["notes.md"] = Text("two"),
+            ["gone.md"] = null,
+            ["applications/2026/draft.md"] = Text("draft")
+        });
+
+        var from = await _repository.GetSnapshotAsync(first);
+        var to = await _repository.GetSnapshotAsync(second);
+        var keep = (await _repository.FindAsync("keep/big", to))!.Sha;
+        _github.Requests.Clear();
+
+        var changes = await _repository.DiffAsync(from, to);
+
+        Assert.That(changes.Select(c => (c.Path, c.Before is not null, c.After is not null)), Is.EquivalentTo(new[]
+        {
+            ("applications/2026/draft.md", false, true),
+            ("gone.md", true, false),
+            ("notes.md", true, true)
+        }));
+        Assert.That(_github.Requests.Any(r => r.Request.Contains(keep)), Is.False, "an unchanged folder is not read");
+    }
+
+    [Test]
+    public async Task Revert_UndoesEveryFileOfACommit_InOneNewCommit()
+    {
+        _github.Commit(new Dictionary<string, byte[]?>
+        {
+            ["deadlines.csv"] = Text("a"),
+            ["drafts/old.md"] = Text("old"),
+            ["notes.md"] = Text("notes")
+        }, "Start");
+        var agent = _github.Commit(new Dictionary<string, byte[]?>
+        {
+            ["deadlines.csv"] = Text("a\nb"),
+            ["drafts/old.md"] = null,
+            ["applications/residency.md"] = Text("draft")
+        }, "Found two open calls\n\nDetails", author: "Claude");
+        _github.Commit("other.md", "later, elsewhere");
+        var before = _github.CommitCount;
+
+        var result = await _repository.RevertAsync(agent);
+
+        Assert.That(result.Status, Is.EqualTo(GitHubCommitStatus.Committed));
+        Assert.That(_github.CommitCount - before, Is.EqualTo(1));
+        Assert.That(_github.Message(result.CommitSha!),
+            Is.EqualTo($"Revert \"Found two open calls\"\n\nThis reverts commit {agent}."));
+        Assert.That(_github.Read("deadlines.csv"), Is.EqualTo(Text("a")));
+        Assert.That(_github.Read("drafts/old.md"), Is.EqualTo(Text("old")));
+        Assert.That(_github.FolderExists("applications"), Is.False);
+        Assert.That(_github.Read("other.md"), Is.Not.Null, "later work stays");
+        Assert.That(_github.Read("notes.md"), Is.EqualTo(Text("notes")));
+        Assert.That(result.Paths, Is.EquivalentTo(new[] { "deadlines.csv", "drafts/old.md", "applications/residency.md" }));
+
+        Assert.That((await _repository.RevertAsync(agent)).Status, Is.EqualTo(GitHubCommitStatus.NothingToCommit),
+            "reverting again finds everything already back");
+    }
+
+    [Test]
+    public async Task Revert_FileChangedLater_WritesNothing_ListsIt()
+    {
+        _github.Commit(new Dictionary<string, byte[]?> { ["a.md"] = Text("a"), ["b.md"] = Text("b") });
+        var agent = _github.Commit(new Dictionary<string, byte[]?> { ["a.md"] = Text("a2"), ["b.md"] = Text("b2") },
+            "Agent", author: "Claude");
+        _github.Commit("b.md", "b3 by hand");
+        var head = _github.Head();
+
+        var result = await _repository.RevertAsync(agent);
+
+        Assert.That(result.Status, Is.EqualTo(GitHubCommitStatus.ChangedMeanwhile));
+        Assert.That(result.Paths, Is.EqualTo(new[] { "b.md" }));
+        Assert.That(_github.Head(), Is.EqualTo(head));
+    }
+
+    [Test]
+    public async Task Revert_PushLandingInBetween_OnAFileOfIt_WritesNothing()
+    {
+        _github.Commit("a.md", "a");
+        var agent = _github.Commit("a.md", "a2", "Agent", author: "Claude");
+        _github.BeforeRefUpdate = () => _github.Commit("a.md", "a3 pushed meanwhile", author: "Claude");
+
+        var result = await _repository.RevertAsync(agent);
+
+        Assert.That(result.Status, Is.EqualTo(GitHubCommitStatus.ChangedMeanwhile));
+        Assert.That(_github.Read("a.md"), Is.EqualTo(Text("a3 pushed meanwhile")));
+    }
+
+    [Test]
+    public async Task Revert_LfsFile_ComesBackAsItsPointer()
+    {
+        var picture = new byte[3000];
+        new Random(2).NextBytes(picture);
+        _github.Commit(new Dictionary<string, byte[]?>
+        {
+            [".gitattributes"] = Text("*.psd filter=lfs diff=lfs merge=lfs -text\n"),
+            ["cover.psd"] = _github.AddLfsObject(picture)
+        });
+        var agent = _github.Commit(new Dictionary<string, byte[]?> { ["cover.psd"] = _github.AddLfsObject([1, 2, 3]) },
+            "New cover", author: "Claude");
+
+        var result = await _repository.RevertAsync(agent);
+        var file = (await _repository.FindAsync("cover.psd"))!;
+        await using var stream = await _repository.OpenReadAsync(file);
+        using var content = new MemoryStream();
+        await stream.CopyToAsync(content);
+
+        Assert.That(result.Status, Is.EqualTo(GitHubCommitStatus.Committed));
+        Assert.That(content.ToArray(), Is.EqualTo(picture));
+    }
+
     // ── History ─────────────────────────────────────────────────────────────
 
     [Test]

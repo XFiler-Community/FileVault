@@ -55,6 +55,71 @@ public enum GitHubWriteStatus
 /// <param name="BlobSha">The file's blob now: the written one, or what is there instead when it changed meanwhile.</param>
 public sealed record GitHubWriteResult(GitHubWriteStatus Status, string? CommitSha, string? BlobSha);
 
+/// <summary>
+/// One file of a commit made with <see cref="GitHubRepository.CommitAsync(IReadOnlyList{GitHubFileEdit}, string, CancellationToken)"/>:
+/// what it becomes, and what it has to be at the branch head for the commit to go ahead.
+/// </summary>
+public sealed class GitHubFileEdit
+{
+    private GitHubFileEdit(string path, string? expectedSha, byte[]? content, GitHubEntry? earlier)
+    {
+        Path = path;
+        ExpectedSha = expectedSha;
+        Content = content;
+        Earlier = earlier;
+    }
+
+    public string Path { get; }
+
+    /// <summary>The blob the file must have at the head; null: there must be no file at <see cref="Path"/>.</summary>
+    public string? ExpectedSha { get; }
+
+    internal byte[]? Content { get; }
+    internal GitHubEntry? Earlier { get; }
+    internal bool IsDelete => Content is null && Earlier is null;
+
+    public static GitHubFileEdit Write(string path, byte[] content, string? expectedSha) =>
+        new(path, expectedSha, content, null);
+
+    /// <summary>
+    /// Puts back a file as some snapshot had it, reusing its blob: nothing is uploaded, and a Git LFS file keeps its
+    /// pointer.
+    /// </summary>
+    public static GitHubFileEdit Restore(string path, GitHubEntry earlier, string? expectedSha) =>
+        earlier.Kind == GitHubEntryKind.File
+            ? new(path, expectedSha, null, earlier)
+            : throw new ArgumentException($"'{earlier.Path}' is a folder.", nameof(earlier));
+
+    public static GitHubFileEdit Delete(string path, string expectedSha) => new(path, expectedSha, null, null);
+}
+
+public enum GitHubCommitStatus
+{
+    Committed,
+
+    /// <summary>Every file already is what the edits make it.</summary>
+    NothingToCommit,
+
+    /// <summary>Some files are not what the caller expected any more: nothing was written.</summary>
+    ChangedMeanwhile,
+
+    /// <summary>Some edits write content to paths tracked by Git LFS, which FileVault does not write.</summary>
+    StoredInLfs
+}
+
+/// <param name="CommitSha">The new commit when <see cref="Status"/> is <see cref="GitHubCommitStatus.Committed"/>.</param>
+/// <param name="Paths">
+/// The files committed; the ones in the way when <see cref="Status"/> is <see cref="GitHubCommitStatus.ChangedMeanwhile"/>
+/// or <see cref="GitHubCommitStatus.StoredInLfs"/>.
+/// </param>
+public sealed record GitHubCommitResult(GitHubCommitStatus Status, string? CommitSha, IReadOnlyList<string> Paths);
+
+/// <summary>
+/// A file that differs between two snapshots: null <see cref="Before"/> is a file added, null <see cref="After"/> one
+/// removed. A Git LFS file has the size of its pointer here.
+/// </summary>
+public sealed record GitHubTreeChange(string Path, GitHubEntry? Before, GitHubEntry? After);
+
 /// <summary>The branch kept moving under every attempt to commit on top of it.</summary>
 public sealed class GitHubConcurrencyException(string message) : IOException(message);
 

@@ -160,6 +160,18 @@ var result = await repository.WriteFileAsync("CLAUDE.md", bytes, expectedBlobSha
     message: "Edit CLAUDE.md");
 // result.Status: Written · ChangedMeanwhile (nothing written) · StoredInLfs (refused)
 
+// Several files as one commit, each only while it is still what the caller saw
+var edit = await repository.CommitAsync([
+    GitHubFileEdit.Write("notes.md", bytes, expectedSha: notes.Sha),
+    GitHubFileEdit.Restore("cover.psd", earlierCover, expectedSha: cover.Sha),  // reuses the old blob, LFS too
+    GitHubFileEdit.Delete("draft.md", expectedSha: draft.Sha)
+], "Tidy up");
+// edit.Status: Committed · NothingToCommit · ChangedMeanwhile (edit.Paths: the files in the way) · StoredInLfs
+
+// Undo a whole commit with a new one; refused (ChangedMeanwhile) when a later commit touched its files again
+var revert = await repository.RevertAsync(agentCommitSha);
+var changes = await repository.DiffAsync(fromSnapshot, toSnapshot);    // files that differ, Before / After
+
 // History for change feeds
 var commits = await repository.GetCommitsAsync(path: "deadlines.csv", perPage: 30);
 var commit = await repository.GetCommitAsync(commits[0].Sha);          // with the files it changed

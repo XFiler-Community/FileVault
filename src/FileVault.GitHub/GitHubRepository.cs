@@ -228,6 +228,156 @@ public sealed class GitHubRepository
             : new GitHubWriteResult(GitHubWriteStatus.Written, commit, BlobSha(content));
     }
 
+    /// <summary>
+    /// Writes, restores and deletes several files as one commit, only while every file is still what its edit
+    /// expects; otherwise nothing is written and <see cref="GitHubCommitStatus.ChangedMeanwhile"/> lists the files
+    /// that are not. Edits are checked again on the new head when someone else moves the branch meanwhile.
+    /// </summary>
+    public async Task<GitHubCommitResult> CommitAsync(IReadOnlyList<GitHubFileEdit> edits, string message,
+        CancellationToken ct = default)
+    {
+        foreach (var edit in edits)
+            if (!GitHubPath.IsValidPath(edit.Path))
+                throw new ArgumentException($"'{edit.Path}' is not a valid path.", nameof(edits));
+
+        var head = await GetHeadAsync(refresh: true, ct).ConfigureAwait(false);
+        var attributes = await GetAttributesAsync(head, ct).ConfigureAwait(false);
+        var inLfs = edits.Where(e => e.Content is not null && attributes.IsLfs(e.Path)).Select(e => e.Path).ToList();
+
+        if (inLfs.Count > 0)
+            return new GitHubCommitResult(GitHubCommitStatus.StoredInLfs, null, inLfs);
+
+        var changes = edits.Select(e => e.Content is not null ? GitHubChange.Put(e.Path, e.Content)
+            : e.Earlier is not null ? GitHubChange.Restore(e.Path, e.Earlier)
+            : GitHubChange.Delete(e.Path)).ToList();
+        List<string> changed = [];
+
+        var commit = await CommitAsync(changes, message, async (snapshot, token) =>
+        {
+            changed = [];
+
+            foreach (var edit in edits)
+            {
+                var current = await FindAsync(edit.Path, snapshot, token).ConfigureAwait(false);
+
+                if (current is { Kind: GitHubEntryKind.Folder } || current?.Sha != edit.ExpectedSha)
+                    changed.Add(edit.Path);
+            }
+
+            return changed.Count == 0;
+        }, ct).ConfigureAwait(false);
+
+        if (changed.Count > 0)
+            return new GitHubCommitResult(GitHubCommitStatus.ChangedMeanwhile, null, changed);
+
+        return commit is null
+            ? new GitHubCommitResult(GitHubCommitStatus.NothingToCommit, null, [])
+            : new GitHubCommitResult(GitHubCommitStatus.Committed, commit, edits.Select(e => e.Path).ToList());
+    }
+
+    /// <summary>
+    /// Undoes a commit with a new one on the branch: every file it changed goes back to how its first parent had
+    /// it. Nothing is merged: when a later commit changed one of those files again, nothing is written and
+    /// <see cref="GitHubCommitStatus.ChangedMeanwhile"/> lists them. Files already back as they were are left alone.
+    /// <paramref name="message"/> null is git's own <c>Revert "…"</c>.
+    /// </summary>
+    public async Task<GitHubCommitResult> RevertAsync(string commitSha, string? message = null,
+        CancellationToken ct = default)
+    {
+        var commit = await ReadCommitAsync(commitSha, ct).ConfigureAwait(false);
+
+        if (commit.Parents.Count == 0)
+            throw new InvalidOperationException($"{commitSha} is the first commit: there is nothing before it.");
+
+        var parent = await ReadSnapshotAsync(commit.Parents[0].Sha, ct).ConfigureAwait(false);
+        var reverted = new GitHubSnapshot(commit.Sha, commit.Tree.Sha, commit.Committer.Date);
+        var head = await GetHeadAsync(refresh: true, ct).ConfigureAwait(false);
+        List<GitHubFileEdit> edits = [];
+        List<string> changed = [];
+
+        foreach (var change in await DiffAsync(parent, reverted, ct).ConfigureAwait(false))
+        {
+            var current = await FindAsync(change.Path, head, ct).ConfigureAwait(false);
+
+            if (IsSameFile(current, change.Before))
+                continue;
+
+            if (!IsSameFile(current, change.After))
+                changed.Add(change.Path);
+            else if (change.Before is null)
+                edits.Add(GitHubFileEdit.Delete(change.Path, change.After!.Sha));
+            else
+                edits.Add(GitHubFileEdit.Restore(change.Path, change.Before, change.After?.Sha));
+        }
+
+        if (changed.Count > 0)
+            return new GitHubCommitResult(GitHubCommitStatus.ChangedMeanwhile, null, changed);
+
+        if (edits.Count == 0)
+            return new GitHubCommitResult(GitHubCommitStatus.NothingToCommit, null, []);
+
+        var title = commit.Message.Split('\n', 2)[0].Trim();
+
+        return await CommitAsync(edits, message ?? $"Revert \"{title}\"\n\nThis reverts commit {commit.Sha}.", ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The files that differ between two snapshots, reading only the folders that changed. A folder added or removed
+    /// shows as each of its files.
+    /// </summary>
+    public async Task<IReadOnlyList<GitHubTreeChange>> DiffAsync(GitHubSnapshot from, GitHubSnapshot to,
+        CancellationToken ct = default)
+    {
+        var fromAttributes = await GetAttributesAsync(from, ct).ConfigureAwait(false);
+        var toAttributes = await GetAttributesAsync(to, ct).ConfigureAwait(false);
+        var changes = new List<GitHubTreeChange>();
+
+        await DiffTreesAsync(from.TreeSha, to.TreeSha, "", changes, fromAttributes, toAttributes, ct)
+            .ConfigureAwait(false);
+
+        return changes;
+    }
+
+    private async Task DiffTreesAsync(string? fromSha, string? toSha, string prefix, List<GitHubTreeChange> changes,
+        GitAttributes fromAttributes, GitAttributes toAttributes, CancellationToken ct)
+    {
+        if (fromSha == toSha)
+            return;
+
+        var before = fromSha is null ? [] : (await GetTreeAsync(fromSha, ct).ConfigureAwait(false)).Tree;
+        var after = toSha is null ? [] : (await GetTreeAsync(toSha, ct).ConfigureAwait(false)).Tree;
+        var names = before.Select(e => e.Path).Union(after.Select(e => e.Path)).Order(StringComparer.Ordinal);
+
+        foreach (var name in names)
+        {
+            var path = GitHubPath.Combine(prefix, name);
+            var a = before.FirstOrDefault(e => e.Path == name && e.Type is "blob" or "tree");
+            var b = after.FirstOrDefault(e => e.Path == name && e.Type is "blob" or "tree");
+
+            if (a?.Sha == b?.Sha && a?.Mode == b?.Mode)
+                continue;
+
+            var fromFolder = a is { Type: "tree" } ? a.Sha : null;
+            var toFolder = b is { Type: "tree" } ? b.Sha : null;
+
+            if (fromFolder is not null || toFolder is not null)
+                await DiffTreesAsync(fromFolder, toFolder, path, changes, fromAttributes, toAttributes, ct)
+                    .ConfigureAwait(false);
+
+            var fromFile = a is { Type: "blob" } ? ToEntry(path, a, fromAttributes) : null;
+            var toFile = b is { Type: "blob" } ? ToEntry(path, b, toAttributes) : null;
+
+            if (fromFile is not null || toFile is not null)
+                changes.Add(new GitHubTreeChange(path, fromFile, toFile));
+        }
+    }
+
+    private static bool IsSameFile(GitHubEntry? current, GitHubEntry? expected) =>
+        expected is null
+            ? current is null
+            : current is { Kind: GitHubEntryKind.File } && current.Sha == expected.Sha && current.Mode == expected.Mode;
+
     /// <summary>The git blob id of some content: what <see cref="GitHubEntry.Sha"/> becomes once it is written.</summary>
     public static string BlobSha(ReadOnlySpan<byte> content)
     {
@@ -321,6 +471,9 @@ public sealed class GitHubRepository
                 }
 
                 return [new ApiNewTreeEntry(change.Path, FileMode, "blob", blob)];
+
+            case GitHubChangeKind.Restore:
+                return [new ApiNewTreeEntry(change.Path, change.Earlier!.Mode, "blob", change.Earlier.Sha)];
 
             case GitHubChangeKind.Copy:
             case GitHubChangeKind.Move:
@@ -435,11 +588,13 @@ public sealed class GitHubRepository
 
     private async Task<GitHubSnapshot> ReadSnapshotAsync(string commitSha, CancellationToken ct)
     {
-        var commit = await Api.GetAsync(Api.Repo($"git/commits/{Uri.EscapeDataString(commitSha)}"),
-            GitHubJsonContext.Default.ApiGitCommit, ct).ConfigureAwait(false);
+        var commit = await ReadCommitAsync(commitSha, ct).ConfigureAwait(false);
 
         return new GitHubSnapshot(commit.Sha, commit.Tree.Sha, commit.Committer.Date);
     }
+
+    private Task<ApiGitCommit> ReadCommitAsync(string commitSha, CancellationToken ct) =>
+        Api.GetAsync(Api.Repo($"git/commits/{Uri.EscapeDataString(commitSha)}"), GitHubJsonContext.Default.ApiGitCommit, ct);
 
     // Trees are addressed by content, so a cached one never goes stale
     private async Task<ApiTree> GetTreeAsync(string sha, CancellationToken ct)
@@ -627,6 +782,7 @@ internal enum GitHubChangeKind
     Put,
     Copy,
     Move,
+    Restore,
     Delete
 }
 
@@ -636,21 +792,26 @@ internal enum GitHubChangeKind
 /// </summary>
 internal sealed class GitHubChange
 {
-    private GitHubChange(GitHubChangeKind kind, string path, string? from, byte[]? content)
+    private GitHubChange(GitHubChangeKind kind, string path, string? from, byte[]? content, GitHubEntry? earlier = null)
     {
         Kind = kind;
         Path = path;
         From = from;
         Content = content;
+        Earlier = earlier;
     }
 
     public GitHubChangeKind Kind { get; }
     public string Path { get; }
     public string? From { get; }
     public byte[]? Content { get; }
+    public GitHubEntry? Earlier { get; }
 
     public static GitHubChange Put(string path, byte[] content) => new(GitHubChangeKind.Put, path, null, content);
     public static GitHubChange Copy(string from, string to) => new(GitHubChangeKind.Copy, to, from, null);
     public static GitHubChange Move(string from, string to) => new(GitHubChangeKind.Move, to, from, null);
+    public static GitHubChange Restore(string path, GitHubEntry earlier) =>
+        new(GitHubChangeKind.Restore, path, null, null, earlier);
+
     public static GitHubChange Delete(string path) => new(GitHubChangeKind.Delete, path, null, null);
 }
