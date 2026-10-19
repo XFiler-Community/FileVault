@@ -8,7 +8,7 @@ A platform-independent .NET library for working with file systems. The single `I
 
 FileVault does not parse user-entered paths or choose a backend for an application. The client resolves its own routes, bookmarks, accounts, and credentials, then creates the appropriate `IFileProvider` directly.
 
-> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · WSL via UNC paths (Windows)
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
 
 ## Packages
 
@@ -20,6 +20,7 @@ FileVault does not parse user-entered paths or choose a backend for an applicati
 | `FileVault.Sftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Sftp.svg)](https://www.nuget.org/packages/FileVault.Sftp) | SFTP via [SSH.NET](https://github.com/sshnet/SSH.NET) |
 | `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
 | `FileVault.GoogleDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GoogleDrive.svg)](https://www.nuget.org/packages/FileVault.GoogleDrive) | Google Drive via Drive API v3 |
+| `FileVault.GitHub` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GitHub.svg)](https://www.nuget.org/packages/FileVault.GitHub) | One branch of a GitHub repository via REST API: commits as writes, Git LFS reads, history |
 | `FileVault.Wsl` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Wsl.svg)](https://www.nuget.org/packages/FileVault.Wsl) | WSL distros via `\\wsl$\` UNC paths (Windows 10 1903+) |
 
 ## Installation
@@ -31,6 +32,7 @@ dotnet add package FileVault.Ftp
 dotnet add package FileVault.Sftp
 dotnet add package FileVault.YandexDisk
 dotnet add package FileVault.GoogleDrive
+dotnet add package FileVault.GitHub
 dotnet add package FileVault.Wsl        # Windows only
 ```
 
@@ -130,6 +132,40 @@ var folder = new GoogleDriveFileProvider(driveService, "1BxiMVs0XRA5nFMdKvBdBZjg
 
 > **Authentication** is the caller's responsibility. Pass any `DriveService` — OAuth2 user, service account, or impersonation. See [Google Auth Library docs](https://developers.google.com/api-client-library/dotnet/guide/aaa_oauth).
 
+### GitHub
+
+```csharp
+using FileVault.GitHub;
+
+// One branch of a repository; the token is any OAuth / GitHub App user token (null: public repos, read-only)
+var repository = new GitHubRepository(new GitHubRepositoryOptions
+{
+    Owner = "anna",
+    Name = "art-life",
+    Branch = "main",
+    Token = token
+}, httpClient);
+
+var root = repository.CreateProvider();              // github:anna/art-life@main:/
+var folder = repository.CreateProvider("applications");
+
+// Every write is one commit on top of the branch head, never a force push.
+// An edit that must not overwrite what changed meanwhile:
+var result = await repository.WriteFileAsync("CLAUDE.md", bytes, expectedBlobSha: opened.BlobSha,
+    message: "Edit CLAUDE.md");
+// result.Status: Written · ChangedMeanwhile (nothing written) · StoredInLfs (refused)
+
+// History for change feeds
+var commits = await repository.GetCommitsAsync(path: "deadlines.csv", perPage: 30);
+var commit = await repository.GetCommitAsync(commits[0].Sha);          // with the files it changed
+var ahead = await repository.CompareAsync("main", "claude/open-calls");  // a cloud agent's branch
+```
+
+> Git keeps no empty folders, so `CreateFolderAsync` puts an empty `.gitkeep` in the new folder. A delete is a commit
+> the history can undo, so `toRecycleBin: true` deletes too. Files tracked by Git LFS (root `.gitattributes`) are
+> read through LFS and listed with their real size; writing them is refused. `ChangedDate` is the date of the
+> commit the folder was listed at — per-file dates come from `GetCommitsAsync(path)`.
+
 ### WSL (Windows Subsystem for Linux)
 
 > Requires Windows 10 1903+ with WSL installed. No-op on macOS/Linux.
@@ -182,7 +218,8 @@ var copyResult = await destProvider.CopyFileInAsync(
 await destProvider.MoveFileInAsync(sourceFileItem, destPath, progress);
 
 // Delete: toRecycleBin: true moves to the backend's trash (Local with ILocalRecycleBin, Yandex Disk,
-// Google Drive); other providers return Failure(NotSupportedException) and delete nothing.
+// Google Drive; GitHub deletes with a commit the history can undo); other providers return
+// Failure(NotSupportedException) and delete nothing.
 var deleted = await provider.DeleteAsync([item], toRecycleBin: true);
 if (deleted.Exception is NotSupportedException)
     deleted = await provider.DeleteAsync([item], toRecycleBin: false); // permanent — confirm with the user first
@@ -278,6 +315,10 @@ dotnet test tests/FileVault.Local.Tests
 
 # FTP integration tests (requires Docker)
 dotnet test tests/FileVault.Ftp.Tests --filter "Category=Integration"
+
+# GitHub provider: unit and contract tests run against an in-memory GitHub; the live test reads a public repo
+dotnet test tests/FileVault.GitHub.Tests --filter "Category!=Integration"
+GITHUB_LIVE_TESTS=1 dotnet test tests/FileVault.GitHub.Tests --filter "Category=Integration"
 
 # Google Drive integration tests (requires a service account JSON)
 export GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON=/path/to/sa.json

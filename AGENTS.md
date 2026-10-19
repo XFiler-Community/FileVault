@@ -14,6 +14,7 @@ src/
   FileVault.Sftp/          ← SSH.NET (Renci.SshNet)
   FileVault.YandexDisk/    ← Egorozh.YandexDisk.Client
   FileVault.GoogleDrive/   ← Google.Apis.Drive.v3
+  FileVault.GitHub/        ← GitHub REST + Git LFS batch API over HttpClient; no extra packages, AOT-safe JSON
   FileVault.Wsl/           ← Windows-only; depends on FileVault.Local (not Core directly)
   FileVault.Cli/           ← example only; not a NuGet package
 tests/
@@ -23,6 +24,7 @@ tests/
   FileVault.Ftp.Tests/
   FileVault.GoogleDrive.Tests/
   FileVault.YandexDisk.Tests/  ← unit tests on a fake IDiskApi
+  FileVault.GitHub.Tests/      ← contract + unit tests on an in-memory GitHub (FakeGitHub); live read test opt-in
 ```
 
 ---
@@ -197,11 +199,23 @@ FileVault providers expose `FullName` values, but user-entered path parsing and 
 | SFTP | `sftp://host/path` | Port optional |
 | Yandex Disk | `disk:/` (root) · `disk:/path` (subfolder) | |
 | Google Drive | `gdrive:root` (root) · `gdrive:<fileId>` (subfolder) | |
+| GitHub | `github:<owner>/<repo>@<branch>:/<path>` | Branch may hold `/`, never `:`; `GitHubPath.TryParse` refuses `..` and `.git` |
 | WSL | `\\wsl$\<distro>\` | Windows only; use `FileVault.Local` against the UNC path |
 
 Clients decide whether to use these strings, their own saved-location model, or another route format.
 
 ---
+
+## GitHub provider — decisions
+
+- One `GitHubRepository` = one branch. Items and providers from the same instance are "same provider" (`ReferenceEquals(item.Repository, repository)`), so copy / move / rename / folder copy stay server-side as tree entries.
+- Every write is **one commit**: blobs → tree on `base_tree` → commit → `PATCH` the ref with `force: false`. Changes are resolved against the head they land on; when the ref update is refused (someone pushed meanwhile) the same changes are applied on the new head, up to 3 times, then `GitHubConcurrencyException`. Never force-push.
+- `WriteFileAsync(path, content, expectedBlobSha, message)` is the edit API: it writes nothing and returns `ChangedMeanwhile` when the blob at `path` is not `expectedBlobSha` (null — the file must not exist).
+- Git keeps no empty folders: `CreateFolderAsync` commits `<folder>/.gitkeep`. Deleting a folder nulls every blob under it (recursive tree), never the tree entry itself.
+- `toRecycleBin: true` deletes with a commit: the history is the trash.
+- Git LFS: tree sizes of LFS files are pointer sizes, so `ListAsync` reads the tiny pointer blobs (once per sha) for the real size; `OpenReadAsync` replaces a pointer with the object via the batch API (token as basic-auth password; the signed storage URL gets only LFS's headers). Writing a path matched by the root `.gitattributes` `filter=lfs` is refused.
+- Trees and LFS pointers are cached by sha (immutable); the branch head is re-read after `HeadCacheDuration` and always before a write.
+- `ChangedDate` = date of the listed head commit; per-file dates come from `GetCommitsAsync(path)`.
 
 ## IOpenableItem
 
@@ -255,7 +269,7 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`).
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via `NUGET_API_KEY` secret.
 - FTP and Google Drive integration tests are **not** run in CI (require Docker / service account).
 
