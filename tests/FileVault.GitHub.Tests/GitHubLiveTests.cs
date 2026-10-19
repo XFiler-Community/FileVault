@@ -38,12 +38,15 @@ public class GitHubLiveTests
         var (stream, length) = await file.OpenReadAsync();
         await using (stream) { }
 
+        var everything = await _repository.ListRecursiveAsync("");
         var commits = await _repository.GetCommitsAsync(perPage: 3);
         var details = await _repository.GetCommitAsync(commits[0].Sha);
         var comparison = await _repository.CompareAsync(commits[^1].Sha, _repository.Branch);
 
         TestContext.Out.WriteLine(string.Join(", ", items.Select(i => i.Name)));
         Assert.That(length, Is.EqualTo(file.Size));
+        Assert.That(everything.Where(e => !e.Path.Contains('/')).Select(e => e.Name),
+            Is.EquivalentTo(items.Select(i => i.Name)));
         Assert.That(details!.Files, Is.Not.Empty);
         Assert.That(comparison.AheadBy, Is.EqualTo(commits.Count - 1));
     }

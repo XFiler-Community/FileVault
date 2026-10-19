@@ -90,12 +90,37 @@ public sealed class GitHubRepository
             .Select(e => ToEntry(GitHubPath.Combine(folderPath, e.Path), e, attributes))
             .ToList();
 
-        await ResolveLfsSizesAsync(entries, ct).ConfigureAwait(false);
+        return await WithLfsSizesAsync(entries, ct).ConfigureAwait(false);
+    }
 
-        return entries.Select(e => _pointers.TryGetValue(e.Sha, out var pointer) && pointer is not null
-                ? e with { Size = pointer.Size, IsLfs = true }
-                : e)
+    /// <summary>
+    /// Every file and folder under <paramref name="folderPath"/> at any depth, each folder before what it holds, read
+    /// in one request for the whole subtree. When GitHub cuts that answer short (over 100 000 entries or 7 MB), the
+    /// subtree is read folder by folder instead. The folders read are cached, so listing anything below afterwards
+    /// needs no request. <paramref name="resolveLfsSizes"/> false leaves an LFS file with its pointer's size
+    /// (<see cref="GitHubEntry.IsLfs"/> still set) and spares a blob read per LFS file not seen before. Throws
+    /// <see cref="DirectoryNotFoundException"/> when there is no such folder.
+    /// </summary>
+    public async Task<IReadOnlyList<GitHubEntry>> ListRecursiveAsync(string folderPath, GitHubSnapshot? at = null,
+        bool resolveLfsSizes = true, CancellationToken ct = default)
+    {
+        var snapshot = at ?? await GetHeadAsync(ct: ct).ConfigureAwait(false);
+        var treeSha = folderPath.Length == 0
+            ? snapshot.TreeSha
+            : await FindEntryAsync(snapshot.TreeSha, folderPath, ct).ConfigureAwait(false) is { Type: "tree" } folder
+                ? folder.Sha
+                : throw new DirectoryNotFoundException($"There is no folder '{folderPath}' in {FullName("")}.");
+
+        var found = new List<(string Path, ApiTreeEntry Entry)>();
+        await CollectSubtreeAsync(treeSha, folderPath, found, ct).ConfigureAwait(false);
+        var attributes = await GetAttributesAsync(snapshot, ct).ConfigureAwait(false);
+
+        var entries = found
+            .Where(f => f.Entry.Type is "blob" or "tree")
+            .Select(f => ToEntry(f.Path, f.Entry, attributes))
             .ToList();
+
+        return resolveLfsSizes ? await WithLfsSizesAsync(entries, ct).ConfigureAwait(false) : entries;
     }
 
     /// <summary>The entry at <paramref name="path"/>, or null when there is none.</summary>
@@ -428,6 +453,85 @@ public sealed class GitHubRepository
         return _trees[sha] = tree;
     }
 
+    /// <summary>
+    /// The entries under a tree with their paths, folders before their content. From the cache when every folder
+    /// below is there; otherwise one recursive request, or a walk when GitHub truncates it.
+    /// </summary>
+    private async Task CollectSubtreeAsync(string sha, string prefix, List<(string Path, ApiTreeEntry Entry)> found,
+        CancellationToken ct)
+    {
+        var start = found.Count;
+
+        if (TryCollectCached(sha, prefix, found))
+            return;
+
+        found.RemoveRange(start, found.Count - start);
+
+        var all = await Api.GetAsync(Api.Repo($"git/trees/{sha}?recursive=1"), GitHubJsonContext.Default.ApiTree, ct)
+            .ConfigureAwait(false);
+
+        if (!all.Truncated)
+        {
+            RememberSubtrees(sha, all.Tree);
+            found.AddRange(all.Tree.Select(e => (GitHubPath.Combine(prefix, e.Path), e)));
+            return;
+        }
+
+        // Over GitHub's limit for one answer: this level alone, then each folder below the same way
+        foreach (var entry in (await GetTreeAsync(sha, ct).ConfigureAwait(false)).Tree)
+        {
+            var path = GitHubPath.Combine(prefix, entry.Path);
+            found.Add((path, entry));
+
+            if (entry.Type == "tree")
+                await CollectSubtreeAsync(entry.Sha, path, found, ct).ConfigureAwait(false);
+        }
+    }
+
+    private bool TryCollectCached(string sha, string prefix, List<(string Path, ApiTreeEntry Entry)> found)
+    {
+        if (!_trees.TryGetValue(sha, out var tree))
+            return false;
+
+        foreach (var entry in tree.Tree)
+        {
+            var path = GitHubPath.Combine(prefix, entry.Path);
+            found.Add((path, entry));
+
+            if (entry.Type == "tree" && !TryCollectCached(entry.Sha, path, found))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>A whole recursive listing holds every tree below it in full: cache each one as a plain listing would.</summary>
+    private void RememberSubtrees(string rootSha, List<ApiTreeEntry> all)
+    {
+        var children = new Dictionary<string, List<ApiTreeEntry>> { [""] = [] };
+        var shas = new Dictionary<string, string> { [""] = rootSha };
+
+        foreach (var entry in all)
+        {
+            var slash = entry.Path.LastIndexOf('/');
+            var parent = slash < 0 ? "" : entry.Path[..slash];
+
+            if (!children.TryGetValue(parent, out var siblings))
+                children[parent] = siblings = [];
+
+            siblings.Add(entry with { Path = entry.Path[(slash + 1)..] });
+
+            if (entry.Type == "tree")
+            {
+                shas[entry.Path] = entry.Sha;
+                children.TryAdd(entry.Path, []);
+            }
+        }
+
+        foreach (var (path, sha) in shas)
+            _trees.TryAdd(sha, new ApiTree(sha, children[path], false));
+    }
+
     private async Task<ApiTree?> FindTreeAsync(string rootSha, string path, CancellationToken ct)
     {
         if (path.Length == 0)
@@ -468,6 +572,16 @@ public sealed class GitHubRepository
     /// A file tracked by LFS shows the pointer's size in its tree; the pointer itself is a tiny blob, read once per
     /// sha to learn the real size.
     /// </summary>
+    private async Task<IReadOnlyList<GitHubEntry>> WithLfsSizesAsync(List<GitHubEntry> entries, CancellationToken ct)
+    {
+        await ResolveLfsSizesAsync(entries, ct).ConfigureAwait(false);
+
+        return entries.Select(e => _pointers.TryGetValue(e.Sha, out var pointer) && pointer is not null
+                ? e with { Size = pointer.Size, IsLfs = true }
+                : e)
+            .ToList();
+    }
+
     private async Task ResolveLfsSizesAsync(IEnumerable<GitHubEntry> entries, CancellationToken ct)
     {
         var unknown = entries

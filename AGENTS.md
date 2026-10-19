@@ -215,6 +215,7 @@ Clients decide whether to use these strings, their own saved-location model, or 
 - `toRecycleBin: true` deletes with a commit: the history is the trash.
 - Git LFS: tree sizes of LFS files are pointer sizes, so `ListAsync` reads the tiny pointer blobs (once per sha) for the real size; `OpenReadAsync` replaces a pointer with the object via the batch API (token as basic-auth password; the signed storage URL gets only LFS's headers). Writing a path matched by the root `.gitattributes` `filter=lfs` is refused.
 - Trees and LFS pointers are cached by sha (immutable); the branch head is re-read after `HeadCacheDuration` and always before a write.
+- `ListRecursiveAsync(folder)` reads a whole subtree with one `git/trees/{sha}?recursive=1` and caches every tree in the answer, so listings below it cost no request; a recursive walk that is already fully cached costs none either. When GitHub answers `truncated: true` it reads that level alone and each subfolder the same way. `resolveLfsSizes: false` skips the pointer reads (sizes stay pointer sizes) for whole-repository scans.
 - `ChangedDate` = date of the listed head commit; per-file dates come from `GetCommitsAsync(path)`.
 
 ## IOpenableItem

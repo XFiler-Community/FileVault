@@ -43,6 +43,12 @@ internal sealed class FakeGitHub : HttpMessageHandler
 
     public int CommitCount => _commits.Count;
 
+    /// <summary>A recursive tree with more entries than this is cut short and marked truncated, as GitHub does past 100 000.</summary>
+    public int? RecursiveTreeLimit { get; set; }
+
+    /// <summary>The Git Trees API calls made so far.</summary>
+    public int TreeRequests => Requests.Count(r => r.Request.StartsWith("GET ") && r.Request.Contains("/git/trees/"));
+
     public GitHubRepository CreateRepository(string branch = "main", string? token = "test-token") =>
         new(new GitHubRepositoryOptions
         {
@@ -415,13 +421,17 @@ internal sealed class FakeGitHub : HttpMessageHandler
     private JsonObject TreeJson(string sha, bool recursive)
     {
         var entries = recursive
-            ? Flatten(sha).Select(e => (e.Path, e.Item))
-            : _trees[sha].Select(i => (Path: i.Name, Item: i));
+            ? Flatten(sha).Select(e => (e.Path, e.Item)).ToList()
+            : _trees[sha].Select(i => (Path: i.Name, Item: i)).ToList();
+        var truncated = recursive && entries.Count > RecursiveTreeLimit;
+
+        if (truncated)
+            entries = entries.Take(RecursiveTreeLimit!.Value).ToList();
 
         return new JsonObject
         {
             ["sha"] = sha,
-            ["truncated"] = false,
+            ["truncated"] = truncated,
             ["tree"] = new JsonArray(entries.Select(e =>
             {
                 var node = new JsonObject

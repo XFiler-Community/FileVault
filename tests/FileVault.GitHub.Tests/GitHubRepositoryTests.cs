@@ -105,6 +105,115 @@ public class GitHubRepositoryTests
         Assert.That(await _repository.OpenReadAtAsync(first, "missing.md"), Is.Null);
     }
 
+    private void SeedNestedProject() => _github.Commit(new Dictionary<string, byte[]?>
+    {
+        ["CLAUDE.md"] = Text("# Project"),
+        [".claude/skills/open-calls/SKILL.md"] = Text("skill"),
+        [".claude/skills/open-calls/refs/list.md"] = Text("refs"),
+        [".claude/agents/editor.md"] = Text("agent"),
+        ["applications/2026/residency/CLAUDE.md"] = Text("nested"),
+        ["applications/2026/residency/draft.md"] = Text("draft")
+    });
+
+    [Test]
+    public async Task ListRecursive_WholeBranch_OneTreeRequest_FoldersBeforeContent()
+    {
+        SeedNestedProject();
+        var head = await _repository.GetHeadAsync();
+        _github.Requests.Clear();
+
+        var entries = await _repository.ListRecursiveAsync("", head);
+
+        Assert.That(_github.TreeRequests, Is.EqualTo(1));
+        Assert.That(entries.Where(e => e.Kind == GitHubEntryKind.File).Select(e => e.Path), Is.EquivalentTo(new[]
+        {
+            "CLAUDE.md", ".claude/skills/open-calls/SKILL.md", ".claude/skills/open-calls/refs/list.md",
+            ".claude/agents/editor.md", "applications/2026/residency/CLAUDE.md", "applications/2026/residency/draft.md"
+        }));
+        Assert.That(entries.Where(e => e.Kind == GitHubEntryKind.Folder).Select(e => e.Path), Is.EquivalentTo(new[]
+        {
+            ".claude", ".claude/skills", ".claude/skills/open-calls", ".claude/skills/open-calls/refs",
+            ".claude/agents", "applications", "applications/2026", "applications/2026/residency"
+        }));
+
+        var paths = entries.Select(e => e.Path).ToList();
+        foreach (var entry in entries.Where(e => e.Path.Contains('/')))
+            Assert.That(paths.IndexOf(entry.Path[..entry.Path.LastIndexOf('/')]), Is.LessThan(paths.IndexOf(entry.Path)));
+
+        var draft = entries.Single(e => e.Path == "applications/2026/residency/draft.md");
+        Assert.That(draft.Size, Is.EqualTo(5));
+        Assert.That(draft.Sha, Is.EqualTo(GitHubRepository.BlobSha(Text("draft"))));
+    }
+
+    [Test]
+    public async Task ListRecursive_FillsTheCache_ListingBelowNeedsNoTreeRequest()
+    {
+        SeedNestedProject();
+        var head = await _repository.GetHeadAsync();
+        await _repository.ListRecursiveAsync("", head);
+        _github.Requests.Clear();
+
+        var skills = await _repository.ListAsync(".claude/skills/open-calls", head);
+        var again = await _repository.ListRecursiveAsync("applications", head);
+        var file = await _repository.FindAsync("applications/2026/residency/draft.md", head);
+
+        Assert.That(_github.TreeRequests, Is.Zero);
+        Assert.That(skills.Select(e => e.Name), Is.EquivalentTo(new[] { "SKILL.md", "refs" }));
+        Assert.That(again.Select(e => e.Path), Does.Contain("applications/2026/residency/CLAUDE.md"));
+        Assert.That(file?.Size, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task ListRecursive_Subfolder_PathsFromTheRoot_MissingFolderThrows()
+    {
+        SeedNestedProject();
+
+        var entries = await _repository.ListRecursiveAsync(".claude/skills");
+
+        Assert.That(entries.Select(e => e.Path), Is.EquivalentTo(new[]
+        {
+            ".claude/skills/open-calls", ".claude/skills/open-calls/SKILL.md", ".claude/skills/open-calls/refs",
+            ".claude/skills/open-calls/refs/list.md"
+        }));
+        Assert.ThrowsAsync<DirectoryNotFoundException>(() => _repository.ListRecursiveAsync("nowhere"));
+        Assert.ThrowsAsync<DirectoryNotFoundException>(() => _repository.ListRecursiveAsync("CLAUDE.md"));
+    }
+
+    [Test]
+    public async Task ListRecursive_Truncated_WalksFolderByFolder_SameEntries()
+    {
+        SeedNestedProject();
+        var expected = (await _github.CreateRepository().ListRecursiveAsync("")).Select(e => e.Path).ToList();
+        _github.RecursiveTreeLimit = 4;
+        _github.Requests.Clear();
+
+        var entries = await _repository.ListRecursiveAsync("");
+
+        Assert.That(entries.Select(e => e.Path), Is.EqualTo(expected));
+        Assert.That(_github.Requests.Count(r => r.Request.Contains("recursive=1")), Is.GreaterThan(1));
+    }
+
+    [Test]
+    public async Task ListRecursive_LfsFile_ObjectSize_OrPointerSizeWhenNotResolved()
+    {
+        var picture = new byte[5000];
+        var pointer = _github.AddLfsObject(picture);
+        _github.Commit(new Dictionary<string, byte[]?>
+        {
+            [".gitattributes"] = Text("*.psd filter=lfs diff=lfs merge=lfs -text\n"),
+            ["art/covers/cover.psd"] = pointer
+        });
+
+        var unresolved = (await _repository.ListRecursiveAsync("", resolveLfsSizes: false))
+            .Single(e => e.Name == "cover.psd");
+        var resolved = (await _repository.ListRecursiveAsync("")).Single(e => e.Name == "cover.psd");
+
+        Assert.That(unresolved.IsLfs, Is.True);
+        Assert.That(unresolved.Size, Is.EqualTo(pointer.Length));
+        Assert.That(resolved.IsLfs, Is.True);
+        Assert.That(resolved.Size, Is.EqualTo(5000));
+    }
+
     // ── Writing ─────────────────────────────────────────────────────────────
 
     [Test]

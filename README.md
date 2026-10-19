@@ -149,6 +149,11 @@ var repository = new GitHubRepository(new GitHubRepositoryOptions
 var root = repository.CreateProvider();              // github:anna/art-life@main:/
 var folder = repository.CreateProvider("applications");
 
+// A whole subtree in one request (paths from the repository root, each folder before its content);
+// folders below it are cached, so listing them afterwards costs nothing
+var everything = await repository.ListRecursiveAsync("", resolveLfsSizes: false);
+var claudeFiles = everything.Where(e => e.Name == "CLAUDE.md");
+
 // Every write is one commit on top of the branch head, never a force push.
 // An edit that must not overwrite what changed meanwhile:
 var result = await repository.WriteFileAsync("CLAUDE.md", bytes, expectedBlobSha: opened.BlobSha,
@@ -164,7 +169,8 @@ var ahead = await repository.CompareAsync("main", "claude/open-calls");  // a cl
 > Git keeps no empty folders, so `CreateFolderAsync` puts an empty `.gitkeep` in the new folder. A delete is a commit
 > the history can undo, so `toRecycleBin: true` deletes too. Files tracked by Git LFS (root `.gitattributes`) are
 > read through LFS and listed with their real size; writing them is refused. `ChangedDate` is the date of the
-> commit the folder was listed at — per-file dates come from `GetCommitsAsync(path)`.
+> commit the folder was listed at — per-file dates come from `GetCommitsAsync(path)`. `ListRecursiveAsync` falls back to
+> reading folder by folder when GitHub truncates a recursive tree (over 100 000 entries or 7 MB).
 
 ### WSL (Windows Subsystem for Linux)
 
