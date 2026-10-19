@@ -334,7 +334,9 @@ git tag v1.2.0
 git push origin v1.2.0
 ```
 
-GitHub Actions will pack and publish all packages to NuGet.org automatically.
+GitHub Actions will pack and publish all packages to NuGet.org automatically, through NuGet Trusted
+Publishing — no API key: a nuget.org trusted publishing policy for this repository and `publish.yml`,
+and the `NUGET_USER` repository secret (nuget.org profile name of the policy's creator).
 
 ## License
 
