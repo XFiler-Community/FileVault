@@ -5,8 +5,11 @@ using DriveFile = Google.Apis.Drive.v3.Data.File;
 
 namespace FileVault.GoogleDrive;
 
-public sealed class GoogleDriveFileItem(DriveFile file, DriveService service) : IFileItem
+public sealed class GoogleDriveFileItem(DriveFile file, DriveService service) : IFileRevisionsItem
 {
+    private const string RevisionFields =
+        "nextPageToken, revisions(id, modifiedTime, size, md5Checksum, lastModifyingUser(displayName))";
+
     internal DriveFile File => file;
     internal DriveService Service => service;
 
@@ -41,6 +44,54 @@ public sealed class GoogleDriveFileItem(DriveFile file, DriveService service) : 
             ?? throw new NotSupportedException(
                 $"Google Drive item '{file.Name}' ({file.MimeType}) has no downloadable content.");
         return service.Files.Export(file.Id, exportMimeType).DownloadAsync(destination, ct);
+    }
+
+    /// <summary>
+    /// Drive keeps the revisions of a binary file for 30 days or 100 revisions unless one is kept forever. A Google
+    /// Docs, Sheets or Slides file has revisions, but their content cannot be downloaded: it has none here.
+    /// </summary>
+    public async Task<IReadOnlyList<FileRevision>> GetRevisionsAsync(CancellationToken ct = default)
+    {
+        if (GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType))
+            return [];
+
+        var revisions = new List<FileRevision>();
+        string? pageToken = null;
+
+        do
+        {
+            var request = service.Revisions.List(file.Id);
+            request.Fields = RevisionFields;
+            request.PageSize = 1000;
+            request.PageToken = pageToken;
+
+            var page = await request.ExecuteAsync(ct).ConfigureAwait(false);
+
+            revisions.AddRange((page.Revisions ?? []).Select(r => new FileRevision(
+                r.Id,
+                r.ModifiedTimeDateTimeOffset ?? DateTimeOffset.MinValue,
+                r.Size,
+                r.Md5Checksum,
+                r.LastModifyingUser?.DisplayName)));
+
+            pageToken = page.NextPageToken;
+        }
+        while (pageToken != null);
+
+        return revisions.OrderBy(r => r.ModifiedDate).ToList();
+    }
+
+    public async Task<(Stream stream, long totalBytes)> OpenRevisionAsync(FileRevision revision,
+        CancellationToken ct = default)
+    {
+        var stream = await TemporaryFileBuffer.CreateAsync(
+            async (destination, token) =>
+            {
+                var download = await service.Revisions.Get(file.Id, revision.Id).DownloadAsync(destination, token)
+                    .ConfigureAwait(false);
+                GoogleDriveTransfer.EnsureCompleted(download);
+            }, ct).ConfigureAwait(false);
+        return (stream, stream.Length);
     }
 
     public async Task DeleteAsync(CancellationToken ct = default)

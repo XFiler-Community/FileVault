@@ -128,6 +128,14 @@ var root = new GoogleDriveFileProvider(driveService, "root");
 
 // Specific folder by Drive file ID
 var folder = new GoogleDriveFileProvider(driveService, "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs");
+
+// A file by its path below a folder (the most recently modified of same-named items)
+if (await root.FindAsync("Projects/art-life/notes.md") is IFileRevisionsItem notes)
+{
+    // Past states Drive keeps, oldest first (binary files: 30 days / 100 revisions; none for Google Docs)
+    var revisions = await notes.GetRevisionsAsync();
+    var (stream, length) = await notes.OpenRevisionAsync(revisions[^2]);
+}
 ```
 
 > **Authentication** is the caller's responsibility. Pass any `DriveService` — OAuth2 user, service account, or impersonation. See [Google Auth Library docs](https://developers.google.com/api-client-library/dotnet/guide/aaa_oauth).

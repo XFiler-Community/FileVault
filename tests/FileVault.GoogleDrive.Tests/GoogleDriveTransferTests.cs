@@ -157,6 +157,92 @@ public class GoogleDriveTransferTests
         Assert.That(targetRequests, Is.Zero);
     }
 
+    [Test]
+    public async Task Revisions_AllPages_OldestFirst()
+    {
+        using var service = CreateService(request => request.RequestUri!.Query.Contains("pageToken=next")
+            ? Json(HttpStatusCode.OK, """{"revisions":[{"id":"r1","modifiedTime":"2026-10-01T10:00:00Z","size":"2","md5Checksum":"aa"}]}""")
+            : Json(HttpStatusCode.OK, """{"nextPageToken":"next","revisions":[{"id":"r2","modifiedTime":"2026-10-02T10:00:00Z","size":"3","md5Checksum":"bb","lastModifyingUser":{"displayName":"Anna"}}]}"""));
+        var item = new GoogleDriveFileItem(
+            new DriveFile { Id = "file-id", Name = "notes.md", MimeType = "text/markdown", Size = 3 }, service);
+
+        var revisions = await item.GetRevisionsAsync();
+
+        Assert.That(revisions.Select(r => (r.Id, r.Size, r.Md5, r.ModifiedBy)), Is.EqualTo(new[]
+        {
+            ("r1", (long?)2, "aa", (string?)null),
+            ("r2", (long?)3, "bb", "Anna")
+        }));
+    }
+
+    [Test]
+    public async Task Revisions_GoogleDoc_NoneWithoutRequest()
+    {
+        var requests = 0;
+        using var service = CreateService(_ =>
+        {
+            requests++;
+            return Json(HttpStatusCode.OK, "{}");
+        });
+        var item = new GoogleDriveFileItem(
+            new DriveFile { Id = "doc-id", Name = "Report", MimeType = "application/vnd.google-apps.document" }, service);
+
+        Assert.That(await item.GetRevisionsAsync(), Is.Empty);
+        Assert.That(requests, Is.Zero);
+    }
+
+    [Test]
+    public async Task OpenRevision_DownloadsThatRevision()
+    {
+        Uri? requested = null;
+        using var service = CreateService(request =>
+        {
+            requested = request.RequestUri;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([4, 5]) };
+        });
+        var item = new GoogleDriveFileItem(
+            new DriveFile { Id = "file-id", Name = "notes.md", MimeType = "text/markdown", Size = 3 }, service);
+
+        var (stream, length) = await item.OpenRevisionAsync(new FileRevision("r1", DateTimeOffset.Now, 2, null, null));
+        await using (stream)
+        {
+            using var copy = new MemoryStream();
+            await stream.CopyToAsync(copy);
+            Assert.That(copy.ToArray(), Is.EqualTo(new byte[] { 4, 5 }));
+        }
+
+        Assert.That(length, Is.EqualTo(2));
+        Assert.That(requested!.AbsolutePath, Does.EndWith("/files/file-id/revisions/r1"));
+        Assert.That(requested.Query, Does.Contain("alt=media"));
+    }
+
+    [Test]
+    public async Task Find_WalksNames_FoldersOnTheWay_NewestOfDuplicates()
+    {
+        var queries = new List<string>();
+        using var service = CreateService(request =>
+        {
+            var q = Uri.UnescapeDataString(request.RequestUri!.Query).Replace('+', ' ');
+            queries.Add(q);
+
+            return q.Contains("name = 'Projects'")
+                ? Json(HttpStatusCode.OK, """{"files":[{"id":"file-named-projects","name":"Projects","mimeType":"text/plain"},{"id":"projects-id","name":"Projects","mimeType":"application/vnd.google-apps.folder"}]}""")
+                : q.Contains(@"name = 'Ann\'s.md'")
+                    ? Json(HttpStatusCode.OK, """{"files":[{"id":"newest","name":"Ann's.md","mimeType":"text/markdown"},{"id":"older","name":"Ann's.md","mimeType":"text/markdown"}]}""")
+                    : Json(HttpStatusCode.OK, """{"files":[]}""");
+        });
+        var provider = new GoogleDriveFileProvider(service, "root");
+
+        var found = await provider.FindAsync("Projects/Ann's.md");
+        var missing = await provider.FindAsync("Projects/none.md");
+
+        Assert.That(found, Is.TypeOf<GoogleDriveFileItem>());
+        Assert.That(found!.FullName, Is.EqualTo("gdrive:newest"));
+        Assert.That(queries[1], Does.Contain("'projects-id' in parents"));
+        Assert.That(queries[0], Does.Contain("orderBy=modifiedTime desc"));
+        Assert.That(missing, Is.Null);
+    }
+
     private static DriveService CreateService(Func<HttpRequestMessage, HttpResponseMessage> respond)
         => new(new BaseClientService.Initializer
         {

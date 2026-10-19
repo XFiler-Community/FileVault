@@ -43,6 +43,43 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
         while (pageToken != null);
     }
 
+    /// <summary>
+    /// The file or folder at <paramref name="relativePath"/> below this folder (<c>a/b.md</c>), found by names; null
+    /// when there is none. Drive allows several items with one name: the most recently modified one wins.
+    /// </summary>
+    public async Task<IFileProviderItem?> FindAsync(string relativePath, CancellationToken ct = default)
+    {
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var parentId = folderId;
+        DriveFile? found = null;
+
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var request = service.Files.List();
+            request.Q = $"'{EscapeQuery(parentId)}' in parents and name = '{EscapeQuery(segments[i])}' and trashed = false";
+            request.Fields = ListFields;
+            request.OrderBy = "modifiedTime desc";
+            request.PageSize = 100;
+
+            var files = (await request.ExecuteAsync(ct).ConfigureAwait(false)).Files ?? [];
+            var isLast = i == segments.Length - 1;
+
+            found = isLast ? files.FirstOrDefault() : files.FirstOrDefault(f => f.MimeType == FolderMimeType);
+
+            if (found is null)
+                return null;
+
+            parentId = found.Id;
+        }
+
+        return found switch
+        {
+            null => null,
+            { MimeType: FolderMimeType } => new GoogleDriveFolderItem(found, service),
+            _ => new GoogleDriveFileItem(found, service)
+        };
+    }
+
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
     {
         try

@@ -220,6 +220,13 @@ Clients decide whether to use these strings, their own saved-location model, or 
 - `ListRecursiveAsync(folder)` reads a whole subtree with one `git/trees/{sha}?recursive=1` and caches every tree in the answer, so listings below it cost no request; a recursive walk that is already fully cached costs none either. When GitHub answers `truncated: true` it reads that level alone and each subfolder the same way. `resolveLfsSizes: false` skips the pointer reads (sizes stay pointer sizes) for whole-repository scans.
 - `ChangedDate` = date of the listed head commit; per-file dates come from `GetCommitsAsync(path)`.
 
+## IFileRevisionsItem
+
+Optional, like `IOpenableItem`: a file whose provider keeps past states. Only `GoogleDriveFileItem` implements it
+(`revisions.list` oldest first, `revisions.get?alt=media`); Google Workspace files return no revisions, since their
+content cannot be downloaded. Yandex Disk has no file history in its public REST API, so it does not implement it.
+`GoogleDriveFileProvider.FindAsync(relativePath)` finds an item by names below the provider's folder.
+
 ## IOpenableItem
 
 Only `FileVault.Local` implements `IOpenableItem` (via `Process.Start` + `UseShellExecute = true`).  
