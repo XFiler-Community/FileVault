@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="XFiler.YandexDisk.Client" Version="9.0.0-preview.1" />
+    <PackageReference Include="XFiler.YandexDisk.Client" Version="9.0.0" />
   </ItemGroup>
 
 </Project>
