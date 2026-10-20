@@ -88,7 +88,7 @@ var provider = new SftpFileProvider(client, "/var/data");
 ### Yandex Disk
 
 ```csharp
-using Egorozh.YandexDisk.Client.Http;
+using XFiler.YandexDisk.Client.Http;
 using FileVault.YandexDisk;
 
 var api = new DiskHttpApi("y0_AgAAAA...", logSaver: null);

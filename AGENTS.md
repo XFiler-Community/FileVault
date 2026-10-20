@@ -12,7 +12,7 @@ src/
   FileVault.Local/         ← System.IO, no extra packages
   FileVault.Ftp/           ← FluentFTP
   FileVault.Sftp/          ← SSH.NET (Renci.SshNet)
-  FileVault.YandexDisk/    ← Egorozh.YandexDisk.Client
+  FileVault.YandexDisk/    ← XFiler.YandexDisk.Client
   FileVault.GoogleDrive/   ← Google.Apis.Drive.v3
   FileVault.GitHub/        ← GitHub REST + Git LFS batch API over HttpClient; no extra packages, AOT-safe JSON
   FileVault.Wsl/           ← Windows-only; depends on FileVault.Local (not Core directly)

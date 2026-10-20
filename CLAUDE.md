@@ -54,7 +54,7 @@ FileVault/
 | Local | — | только BCL `System.IO` |
 | Ftp | `FluentFTP` | AsyncFtpClient — реальный, проверенный клиент |
 | Sftp | `Renci.SshNet` | SftpClient — реальный клиент |
-| YandexDisk | `Egorozh.YandexDisk.Client` | кастомный клиент автора X-Filer, проверен |
+| YandexDisk | `XFiler.YandexDisk.Client` | кастомный клиент автора X-Filer, проверен |
 | Все тесты | `NUnit`, `NSubstitute`, `Microsoft.NET.Test.Sdk` | стандартный стек |
 | Ftp.Tests | `TestContainers` (NuGet: `Testcontainers`) | поднять FTP-сервер в Docker |
 

@@ -1,8 +1,7 @@
 using System.Net;
-using System.Reflection;
-using Egorozh.YandexDisk.Client;
-using Egorozh.YandexDisk.Client.Clients;
-using Egorozh.YandexDisk.Client.Protocol;
+using XFiler.YandexDisk.Client;
+using XFiler.YandexDisk.Client.Clients;
+using XFiler.YandexDisk.Client.Protocol;
 using FileVault.Core;
 
 namespace FileVault.YandexDisk.Tests;
@@ -125,6 +124,33 @@ public class YandexDiskFileProviderTests
         Assert.That(targetApi.Moves, Is.Empty);
     }
 
+    [Test]
+    public async Task CopyFileInAsync_AsyncOperationFails_ReturnsFailure()
+    {
+        var api = new FakeDiskApi { AsyncOperationStatus = OperationStatus.Failure };
+        var provider = new YandexDiskFileProvider(api, "disk:/Dest");
+        var source = new YandexDiskFileItem(FileResource("disk:/Src/a.txt"), api);
+
+        var result = await provider.CopyFileInAsync(source, "disk:/Dest/a.txt", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.False, "a failed copy operation must not be reported as done");
+        Assert.That(result.Exception, Is.InstanceOf<YandexOperationFailedException>());
+    }
+
+    [Test]
+    public async Task DeleteAsync_CancelledWhileOperationRuns_ReturnsCancelledFailure()
+    {
+        var api = new FakeDiskApi { AsyncOperationStatus = OperationStatus.InProgress };
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+        var file = new YandexDiskFileItem(FileResource("disk:/Docs/a.txt"), api);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var result = await provider.DeleteAsync([file], toRecycleBin: true, cts.Token);
+
+        Assert.That(result.IsSuccess, Is.False);
+        Assert.That(result.Exception, Is.InstanceOf<OperationCanceledException>());
+    }
+
     private static Resource FileResource(string path) => new()
     {
         Name = path[(path.LastIndexOf('/') + 1)..],
@@ -132,15 +158,15 @@ public class YandexDiskFileProviderTests
         Type = ResourceType.File
     };
 
-    // YandexApiException has only an internal constructor.
-    private static YandexApiException ApiError(HttpStatusCode status)
-        => (YandexApiException)Activator.CreateInstance(typeof(YandexApiException),
-            BindingFlags.NonPublic | BindingFlags.Instance, null, [status, status.ToString(), null], null)!;
+    private static YandexApiException ApiError(HttpStatusCode status) => new(status, status.ToString(), error: null);
 
     private sealed class FakeDiskApi : IDiskApi, IMetaInfoClient, ICommandsClient, IFilesClient
     {
         public Func<ResourceRequest, Resource> GetInfo { get; init; } = _ => throw ApiError(HttpStatusCode.NotFound);
         public byte[] Content { get; init; } = [];
+
+        // Set: copy, move and delete answer 202 Accepted and the operation reports this status.
+        public OperationStatus? AsyncOperationStatus { get; init; }
 
         public List<(string From, string To)> Copies { get; } = [];
         public List<(string From, string To)> Moves { get; } = [];
@@ -169,14 +195,14 @@ public class YandexDiskFileProviderTests
             return Done();
         }
 
-        public Task<Link> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default)
+        public async Task<Link?> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default)
         {
             Deletes.Add(request.Path);
-            return Done();
+            return await Done();
         }
 
-        public Task<Operation> GetOperationStatus(Link link, CancellationToken cancellationToken = default)
-            => Task.FromResult(new Operation { Status = OperationStatus.Success });
+        public Task<Operation> GetOperationStatusAsync(Link link, CancellationToken cancellationToken = default)
+            => Task.FromResult(new Operation { Status = AsyncOperationStatus ?? OperationStatus.Success });
 
         public Task<Link> GetUploadLinkAsync(string path, bool overwrite, CancellationToken cancellationToken = default)
             => Task.FromResult(new Link { Href = path });
@@ -187,10 +213,10 @@ public class YandexDiskFileProviderTests
             return Task.FromResult(new Link { Href = path });
         }
 
-        public Task<(Stream, long)> DownloadFastAsync(Link link, CancellationToken cancellationToken = default)
+        public Task<(Stream Stream, long Length)> DownloadFastAsync(Link link, CancellationToken cancellationToken = default)
             => Task.FromResult<(Stream, long)>((new MemoryStream(Content), Content.Length));
 
-        public async Task UploadWithProgressAsync(Link link, Stream file, long fileSize, Action<double> progressCallback,
+        public async Task UploadWithProgressAsync(Link link, Stream file, long fileSize, Action<double>? progressCallback,
             CancellationToken ct = default)
         {
             using var copy = new MemoryStream();
@@ -201,17 +227,19 @@ public class YandexDiskFileProviderTests
         public Task UploadAsync(Link link, Stream file, CancellationToken cancellationToken = default)
             => UploadWithProgressAsync(link, file, file.Length, _ => { }, cancellationToken);
 
-        private static Task<Link> Done() => Task.FromResult(new Link { HttpStatusCode = HttpStatusCode.Created });
+        private Task<Link> Done() => Task.FromResult(AsyncOperationStatus is null
+            ? new Link { HttpStatusCode = HttpStatusCode.Created }
+            : new Link { Href = "https://cloud-api.yandex.net/v1/disk/operations/1", HttpStatusCode = HttpStatusCode.Accepted });
 
         public Task<Disk> GetDiskInfoAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Resource> GetTrashInfoAsync(ResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<FilesResourceList> GetFilesInfoAsync(FilesResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<LastUploadedResourceList> GetLastUploadedInfoAsync(LastUploadedResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Resource> AppendCustomProperties(string path, IDictionary<string, string> properties, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Link> PublishFolderAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Link> UnpublishFolderAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Link> CreateDictionaryAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Link> EmptyTrashAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Resource> AppendCustomPropertiesAsync(string path, IDictionary<string, string?> properties, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Link> PublishAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Link> UnpublishAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Link> CreateDirectoryAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Link?> EmptyTrashAsync(string? path = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Link> RestoreFromTrashAsync(RestoreFromTrashRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Stream> DownloadAsync(Link link, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }

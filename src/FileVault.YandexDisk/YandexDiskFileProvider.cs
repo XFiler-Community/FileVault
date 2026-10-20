@@ -1,7 +1,7 @@
 using System.Net;
-using Egorozh.YandexDisk.Client;
-using Egorozh.YandexDisk.Client.Clients;
-using Egorozh.YandexDisk.Client.Protocol;
+using XFiler.YandexDisk.Client;
+using XFiler.YandexDisk.Client.Clients;
+using XFiler.YandexDisk.Client.Protocol;
 using FileVault.Core;
 
 namespace FileVault.YandexDisk;
@@ -53,7 +53,7 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IF
         {
             var resolvedName = await ResolveFolderNameAsync(name, ct).ConfigureAwait(false);
             var path = CombinePath(remotePath, resolvedName);
-            await api.Commands.CreateDictionaryAsync(path, ct).ConfigureAwait(false);
+            await api.Commands.CreateDirectoryAsync(path, ct).ConfigureAwait(false);
             IFolderItem result = new YandexDiskPlaceholderFolderItem(path, api);
             return FileOperationResult<IFolderItem>.Success(result);
         }

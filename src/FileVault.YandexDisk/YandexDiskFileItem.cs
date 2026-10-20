@@ -1,6 +1,6 @@
-using Egorozh.YandexDisk.Client;
-using Egorozh.YandexDisk.Client.Clients;
-using Egorozh.YandexDisk.Client.Protocol;
+using XFiler.YandexDisk.Client;
+using XFiler.YandexDisk.Client.Clients;
+using XFiler.YandexDisk.Client.Protocol;
 using FileVault.Core;
 
 namespace FileVault.YandexDisk;

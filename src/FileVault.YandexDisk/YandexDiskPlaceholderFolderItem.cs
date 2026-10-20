@@ -1,4 +1,4 @@
-using Egorozh.YandexDisk.Client;
+using XFiler.YandexDisk.Client;
 using FileVault.Core;
 
 namespace FileVault.YandexDisk;

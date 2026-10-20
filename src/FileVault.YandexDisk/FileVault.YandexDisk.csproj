@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <Description>Yandex Disk cloud provider for FileVault. Implements IFileProvider for Yandex Disk using the REST API via Egorozh.YandexDisk.Client, with server-side copy/move and paginated listing.</Description>
+    <Description>Yandex Disk cloud provider for FileVault. Implements IFileProvider for Yandex Disk using the REST API via XFiler.YandexDisk.Client, with server-side copy/move and paginated listing.</Description>
     <PackageTags>file-manager;file-provider;yandex;yandex-disk;cloud;storage</PackageTags>
   </PropertyGroup>
 
@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Egorozh.YandexDisk.Client" Version="8.2.0" />
+    <PackageReference Include="XFiler.YandexDisk.Client" Version="9.0.0-preview.1" />
   </ItemGroup>
 
 </Project>
