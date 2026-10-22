@@ -8,7 +8,7 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
 {
     private const string FolderMimeType = GoogleDriveMimeTypes.Folder;
     private const string Scheme = "gdrive:";
-    private const string ListFields = "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents)";
+    private const string ListFields = "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, thumbnailLink)";
 
     public string Name => folderId == "root" ? "Google Drive" : folderId;
     public string FullName => $"{Scheme}{folderId}";

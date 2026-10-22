@@ -227,6 +227,17 @@ Optional, like `IOpenableItem`: a file whose provider keeps past states. Only `G
 content cannot be downloaded. Yandex Disk has no file history in its public REST API, so it does not implement it.
 `GoogleDriveFileProvider.FindAsync(relativePath)` finds an item by names below the provider's folder.
 
+## IThumbnailItem
+
+Optional: a file whose provider keeps a small picture of it. `HasThumbnail` is known from the listing (no request);
+`OpenThumbnailAsync(size)` returns a buffered JPEG/PNG of about that size, or null when there is none.
+- Google Drive: `thumbnailLink` is in the listing fields; the size is the link's `=s<px>` suffix. The link lives for
+  hours: a 403/404/410 asks `files.get` for a fresh one and tries once more. Google Docs files have thumbnails too.
+- Yandex Disk: the listing's `preview` link (size S, 150 px); its `size` query parameter is set to the nearest larger of
+  S/M/L/XL/XXL/XXXL, and if that is refused the link is used as listed. Downloaded through `IFilesClient`, which adds
+  the OAuth header.
+- Local, FTP, SFTP, GitHub do not implement it: a client reads the file itself if it wants a picture.
+
 ## IOpenableItem
 
 Only `FileVault.Local` implements `IOpenableItem` (via `Process.Start` + `UseShellExecute = true`).  

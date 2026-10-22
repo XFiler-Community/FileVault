@@ -151,6 +151,51 @@ public class YandexDiskFileProviderTests
         Assert.That(result.Exception, Is.InstanceOf<OperationCanceledException>());
     }
 
+    private const string Preview =
+        "https://downloader.disk.yandex.ru/preview/abc/inf/def?uid=1&filename=a.jpg&size=S&crop=0";
+
+    [Test]
+    public async Task OpenThumbnailAsync_AsksPreviewOfNearestLargerSize()
+    {
+        var api = new FakeDiskApi { Content = [7, 8] };
+        var resource = FileResource("disk:/Photos/a.jpg");
+        resource.Preview = Preview;
+        var file = new YandexDiskFileItem(resource, api);
+
+        await using var thumbnail = await file.OpenThumbnailAsync(256);
+
+        Assert.That(file.HasThumbnail, Is.True);
+        Assert.That(api.DownloadedLinks, Is.EqualTo(new[] { Preview.Replace("size=S", "size=M") }));
+        Assert.That(((MemoryStream) thumbnail!).ToArray(), Is.EqualTo(new byte[] { 7, 8 }));
+    }
+
+    [Test]
+    public async Task OpenThumbnailAsync_SizeRefused_UsesListedPreview()
+    {
+        var api = new FakeDiskApi
+        {
+            DownloadLink = link => link == Preview ? [5] : throw ApiError(HttpStatusCode.BadRequest)
+        };
+        var resource = FileResource("disk:/Photos/a.jpg");
+        resource.Preview = Preview;
+
+        await using var thumbnail = await new YandexDiskFileItem(resource, api).OpenThumbnailAsync(256);
+
+        Assert.That(((MemoryStream) thumbnail!).ToArray(), Is.EqualTo(new byte[] { 5 }));
+        Assert.That(api.DownloadedLinks, Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task OpenThumbnailAsync_NoPreview_ReturnsNull()
+    {
+        var api = new FakeDiskApi();
+        var file = new YandexDiskFileItem(FileResource("disk:/Docs/a.zip"), api);
+
+        Assert.That(file.HasThumbnail, Is.False);
+        Assert.That(await file.OpenThumbnailAsync(256), Is.Null);
+        Assert.That(api.DownloadedLinks, Is.Empty);
+    }
+
     private static Resource FileResource(string path) => new()
     {
         Name = path[(path.LastIndexOf('/') + 1)..],
@@ -213,8 +258,15 @@ public class YandexDiskFileProviderTests
             return Task.FromResult(new Link { Href = path });
         }
 
+        public Func<string, byte[]>? DownloadLink { get; init; }
+        public List<string> DownloadedLinks { get; } = [];
+
         public Task<(Stream Stream, long Length)> DownloadFastAsync(Link link, CancellationToken cancellationToken = default)
-            => Task.FromResult<(Stream, long)>((new MemoryStream(Content), Content.Length));
+        {
+            DownloadedLinks.Add(link.Href);
+            var content = DownloadLink?.Invoke(link.Href) ?? Content;
+            return Task.FromResult<(Stream, long)>((new MemoryStream(content), content.Length));
+        }
 
         public async Task UploadWithProgressAsync(Link link, Stream file, long fileSize, Action<double>? progressCallback,
             CancellationToken ct = default)

@@ -136,6 +136,13 @@ if (await root.FindAsync("Projects/art-life/notes.md") is IFileRevisionsItem not
     var revisions = await notes.GetRevisionsAsync();
     var (stream, length) = await notes.OpenRevisionAsync(revisions[^2]);
 }
+
+// A picture of a file without downloading it (Google Drive and Yandex Disk files implement IThumbnailItem)
+await foreach (var item in root.GetItemsAsync(FileProviderFilter.Default))
+{
+    if (item is IThumbnailItem { HasThumbnail: true } pictured)
+        await using (var thumbnail = await pictured.OpenThumbnailAsync(256)) { /* JPEG or PNG */ }
+}
 ```
 
 > **Authentication** is the caller's responsibility. Pass any `DriveService` — OAuth2 user, service account, or impersonation. See [Google Auth Library docs](https://developers.google.com/api-client-library/dotnet/guide/aaa_oauth).

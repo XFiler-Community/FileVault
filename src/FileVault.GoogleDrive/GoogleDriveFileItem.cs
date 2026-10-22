@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text.RegularExpressions;
 using FileVault.Core;
 using Google.Apis.Download;
 using Google.Apis.Drive.v3;
@@ -5,7 +7,8 @@ using DriveFile = Google.Apis.Drive.v3.Data.File;
 
 namespace FileVault.GoogleDrive;
 
-public sealed class GoogleDriveFileItem(DriveFile file, DriveService service) : IFileRevisionsItem
+public sealed partial class GoogleDriveFileItem(DriveFile file, DriveService service)
+    : IFileRevisionsItem, IThumbnailItem
 {
     private const string RevisionFields =
         "nextPageToken, revisions(id, modifiedTime, size, md5Checksum, lastModifyingUser(displayName))";
@@ -96,4 +99,49 @@ public sealed class GoogleDriveFileItem(DriveFile file, DriveService service) : 
 
     public async Task DeleteAsync(CancellationToken ct = default)
         => await service.Files.Delete(file.Id).ExecuteAsync(ct).ConfigureAwait(false);
+
+    public bool HasThumbnail => file.ThumbnailLink is not null;
+
+    /// <summary>
+    /// The thumbnail link of a listing lives for hours: once it is refused, a fresh one is asked for and tried once.
+    /// The link takes the size as its <c>=s&lt;px&gt;</c> suffix.
+    /// </summary>
+    public async Task<Stream?> OpenThumbnailAsync(int size, CancellationToken ct = default)
+    {
+        if (file.ThumbnailLink is not { } link)
+            return null;
+
+        if (await DownloadThumbnailAsync(link, size, ct).ConfigureAwait(false) is { } thumbnail)
+            return thumbnail;
+
+        var request = service.Files.Get(file.Id);
+        request.Fields = "thumbnailLink";
+        var fresh = await request.ExecuteAsync(ct).ConfigureAwait(false);
+
+        file.ThumbnailLink = fresh.ThumbnailLink;
+
+        if (fresh.ThumbnailLink is null)
+            return null;
+
+        return await DownloadThumbnailAsync(fresh.ThumbnailLink, size, ct).ConfigureAwait(false)
+            ?? throw new HttpRequestException($"Google Drive refused the thumbnail of '{file.Name}'.");
+    }
+
+    /// <summary>Null when the link is refused (expired); other failures throw.</summary>
+    private async Task<Stream?> DownloadThumbnailAsync(string link, int size, CancellationToken ct)
+    {
+        using var response = await service.HttpClient
+            .GetAsync(ThumbnailSize().Replace(link, $"=s{size}"), HttpCompletionOption.ResponseHeadersRead, ct)
+            .ConfigureAwait(false);
+
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound or HttpStatusCode.Gone)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+
+        return new MemoryStream(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
+    }
+
+    [GeneratedRegex(@"=s\d+$")]
+    private static partial Regex ThumbnailSize();
 }

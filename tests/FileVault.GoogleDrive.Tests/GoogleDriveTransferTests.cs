@@ -243,6 +243,77 @@ public class GoogleDriveTransferTests
         Assert.That(missing, Is.Null);
     }
 
+    [Test]
+    public async Task Thumbnail_ListedLink_AtAskedSize()
+    {
+        var requested = new List<Uri>();
+        using var service = CreateService(request =>
+        {
+            requested.Add(request.RequestUri!);
+
+            return request.RequestUri!.Host == "lh3.googleusercontent.com"
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([7, 8]) }
+                : Json(HttpStatusCode.OK, """{"files":[{"id":"photo-id","name":"photo.jpg","mimeType":"image/jpeg","size":"3","thumbnailLink":"https://lh3.googleusercontent.com/drive-storage/abc=s220"}]}""");
+        });
+        var provider = new GoogleDriveFileProvider(service, "root");
+
+        var items = new List<IFileProviderItem>();
+        await foreach (var item in provider.GetItemsAsync(FileProviderFilter.Default))
+            items.Add(item);
+
+        var photo = (IThumbnailItem) items.Single();
+        await using var thumbnail = await photo.OpenThumbnailAsync(256);
+
+        Assert.That(photo.HasThumbnail, Is.True);
+        Assert.That(Uri.UnescapeDataString(requested[0].Query), Does.Contain("thumbnailLink"));
+        Assert.That(requested[1].AbsoluteUri, Is.EqualTo("https://lh3.googleusercontent.com/drive-storage/abc=s256"));
+        Assert.That(((MemoryStream) thumbnail!).ToArray(), Is.EqualTo(new byte[] { 7, 8 }));
+    }
+
+    [Test]
+    public async Task Thumbnail_ExpiredLink_AsksForFreshOne()
+    {
+        var requested = new List<Uri>();
+        using var service = CreateService(request =>
+        {
+            requested.Add(request.RequestUri!);
+
+            return request.RequestUri!.AbsolutePath switch
+            {
+                "/old=s128" => new HttpResponseMessage(HttpStatusCode.Forbidden),
+                "/new=s128" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([9]) },
+                _ => Json(HttpStatusCode.OK, """{"thumbnailLink":"https://lh3.googleusercontent.com/new=s220"}""")
+            };
+        });
+        var item = new GoogleDriveFileItem(new DriveFile
+        {
+            Id = "photo-id", Name = "photo.jpg", MimeType = "image/jpeg",
+            ThumbnailLink = "https://lh3.googleusercontent.com/old=s220"
+        }, service);
+
+        await using var thumbnail = await item.OpenThumbnailAsync(128);
+
+        Assert.That(((MemoryStream) thumbnail!).ToArray(), Is.EqualTo(new byte[] { 9 }));
+        Assert.That(requested[1].AbsolutePath, Does.EndWith("/files/photo-id"));
+        Assert.That(requested, Has.Count.EqualTo(3));
+    }
+
+    [Test]
+    public async Task Thumbnail_NoLink_NoRequest()
+    {
+        var requests = 0;
+        using var service = CreateService(_ =>
+        {
+            requests++;
+            return Json(HttpStatusCode.OK, "{}");
+        });
+        var item = new GoogleDriveFileItem(new DriveFile { Id = "zip-id", Name = "a.zip", MimeType = "application/zip" }, service);
+
+        Assert.That(item.HasThumbnail, Is.False);
+        Assert.That(await item.OpenThumbnailAsync(256), Is.Null);
+        Assert.That(requests, Is.Zero);
+    }
+
     private static DriveService CreateService(Func<HttpRequestMessage, HttpResponseMessage> respond)
         => new(new BaseClientService.Initializer
         {
