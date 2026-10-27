@@ -238,6 +238,29 @@ Optional: a file whose provider keeps a small picture of it. `HasThumbnail` is k
   the OAuth header.
 - Local, FTP, SFTP, GitHub do not implement it: a client reads the file itself if it wants a picture.
 
+## ISearchableFileProvider
+
+Optional: a provider that finds items by name below its folder on the backend. An empty query finds nothing.
+- Yandex Disk: the REST API has no name search, so `SearchAsync` pages `resources/files` (the flat list of every file
+  on the disk, 1000 per request, whatever the folder) and keeps paths below the folder. That list has no folders: a
+  matching folder is derived from the paths of files below it and read once (`GetInfoAsync`) for metadata, so a folder
+  with no file at any depth below it is never found.
+- Google Drive: `name contains '<q>' and trashed = false` (Drive matches word prefixes, not substrings), 1000 per page,
+  then `GoogleDriveAncestry` keeps items whose parents lead up to the folder, reading each ancestor once per search.
+  `root` is resolved to its real id first (parents never say "root"); items only shared with the user have no visible
+  parent chain to it and drop out. Shared drives are not searched.
+
+## IPublicLinkItem
+
+Optional: a file or folder that can be shared by a public view-only link. Implemented by the Yandex Disk and Google
+Drive file and folder items (not by placeholders). `RemovePublicLinkAsync` returns `true` when a link was removed,
+`false` when there was none.
+- Yandex Disk: the resource is read first (a listing's `public_url` may be stale); not published → `PublishAsync`,
+  then read again for `public_url`. Remove → `UnpublishAsync` only when it is published.
+- Google Drive: `permissions.list`; no `anyone` permission → create `{type: anyone, role: reader,
+  allowFileDiscovery: false}`; then `files.get(webViewLink)`. An existing `anyone` permission is left as it is (even a
+  writer one). Remove deletes every `anyone` permission (`domain` ones stay).
+
 ## IOpenableItem
 
 Only `FileVault.Local` implements `IOpenableItem` (via `Process.Start` + `UseShellExecute = true`).  

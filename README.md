@@ -291,6 +291,34 @@ async Task RecursiveCopyAsync(IFolderItem source, IFileProvider dest, string des
 }
 ```
 
+### Search and public links (optional capabilities)
+
+Two optional contracts in `FileVault.Core`; check for them with a type test. Both are implemented by the Yandex Disk and Google Drive providers and their file and folder items.
+
+```csharp
+// Find files and folders whose name contains the text, in this folder and every folder below it
+if (provider is ISearchableFileProvider searchable)
+{
+    await foreach (var found in searchable.SearchAsync("report"))
+        Console.WriteLine(found.FullName);
+}
+
+// A view-only link anyone can open without signing in (this changes sharing: ask the user first)
+if (item is IPublicLinkItem shareable)
+{
+    var link = await shareable.GetPublicLinkAsync();   // existing link, or a new one
+    if (link.IsSuccess)
+        Console.WriteLine(link.Result);
+
+    await shareable.RemovePublicLinkAsync();           // stop sharing; no link is not an error
+}
+```
+
+| | `ISearchableFileProvider` | `IPublicLinkItem` |
+|---|---|---|
+| Yandex Disk | No search endpoint: pages through the flat list of every file on the disk (1000 per request) and keeps names below the folder. Folders are found through the files inside them — a folder with no file anywhere below it is not found | Publishes the resource and returns its `public_url`; remove = unpublish |
+| Google Drive | Drive's `name contains` (matches the start of words: "report" finds "Annual report.pdf", not "myreport.pdf"), not trashed, kept to items below the folder; for `root` — My Drive, without items only shared with you. Shared drives are not searched | Adds an `anyone` / `reader` permission and returns `webViewLink`; an existing `anyone` permission is kept as is; remove = delete every `anyone` permission |
+
 ## Microsoft.Extensions.DependencyInjection
 
 Register authenticated clients, services, or app-specific factories. FileVault itself does not provide a DI routing abstraction.
