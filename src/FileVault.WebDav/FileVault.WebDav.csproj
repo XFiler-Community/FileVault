@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>WebDAV provider for FileVault. Implements IFileProvider over any WebDAV server (Nextcloud, ownCloud, Synology, Yandex Disk WebDAV, Apache, nginx, rclone) with HttpClient and Basic authentication: streaming downloads and uploads, server-side copy and move, quota of the account.</Description>
+    <PackageTags>file-manager;file-provider;webdav;nextcloud;owncloud;synology;cloud;storage;cross-platform</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileVault.Core\FileVault.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileVault.WebDav.Tests" />
+  </ItemGroup>
+
+</Project>

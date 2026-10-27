@@ -8,7 +8,7 @@ A platform-independent .NET library for working with file systems. The single `I
 
 FileVault does not parse user-entered paths or choose a backend for an application. The client resolves its own routes, bookmarks, accounts, and credentials, then creates the appropriate `IFileProvider` directly.
 
-> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · WebDAV (Nextcloud, ownCloud, Synology, Yandex Disk WebDAV, …) · Yandex Disk · Google Drive · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
 
 ## Packages
 
@@ -18,6 +18,7 @@ FileVault does not parse user-entered paths or choose a backend for an applicati
 | `FileVault.Local` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Local.svg)](https://www.nuget.org/packages/FileVault.Local) | Local file system |
 | `FileVault.Ftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Ftp.svg)](https://www.nuget.org/packages/FileVault.Ftp) | FTP/FTPS via [FluentFTP](https://github.com/robinrodricks/FluentFTP) |
 | `FileVault.Sftp` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Sftp.svg)](https://www.nuget.org/packages/FileVault.Sftp) | SFTP via [SSH.NET](https://github.com/sshnet/SSH.NET) |
+| `FileVault.WebDav` | [![NuGet](https://img.shields.io/nuget/v/FileVault.WebDav.svg)](https://www.nuget.org/packages/FileVault.WebDav) | Any WebDAV server over HttpClient (Basic auth), no extra dependencies, AOT-compatible |
 | `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
 | `FileVault.GoogleDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GoogleDrive.svg)](https://www.nuget.org/packages/FileVault.GoogleDrive) | Google Drive via Drive API v3 |
 | `FileVault.GitHub` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GitHub.svg)](https://www.nuget.org/packages/FileVault.GitHub) | One branch of a GitHub repository via REST API: commits as writes, Git LFS reads, history |
@@ -30,6 +31,7 @@ dotnet add package FileVault.Core
 dotnet add package FileVault.Local
 dotnet add package FileVault.Ftp
 dotnet add package FileVault.Sftp
+dotnet add package FileVault.WebDav
 dotnet add package FileVault.YandexDisk
 dotnet add package FileVault.GoogleDrive
 dotnet add package FileVault.GitHub
@@ -84,6 +86,39 @@ client.Connect();
 
 var provider = new SftpFileProvider(client, "/var/data");
 ```
+
+### WebDAV
+
+```csharp
+using FileVault.WebDav;
+
+// One account; the base URI is the root folder of the account
+using var connection = new WebDavConnection
+{
+    BaseUri = new Uri("https://cloud.example.com/remote.php/dav/files/alice/"),  // Nextcloud
+    // BaseUri = new Uri("https://webdav.yandex.ru/"),                            // Yandex Disk
+    // BaseUri = new Uri("https://nas.local:5006/"),                              // Synology
+    UserName = "alice",
+    Password = appPassword,
+    // HttpClient = sharedClient,   // optional, caller-owned; otherwise the connection makes its own (no timeout)
+};
+
+// Root with the account's quota (one PROPFIND; also checks address and credentials)
+var drive = await connection.GetDriveAsync();
+Console.WriteLine($"{drive.TotalFreeSpace} of {drive.TotalSize} bytes free");   // 0 when the server does not say
+
+// A folder: relative to the base URI, or a FullName of this server
+var photos = new WebDavFileProvider(connection, "Photos/2024");
+Console.WriteLine(photos.FullName);   // webdavs://cloud.example.com/remote.php/dav/files/alice/Photos/2024
+```
+
+> `FullName` is `webdavs://host[:port]/path` for https and `webdav://host[:port]/path` for http; `path` is decoded
+> (spaces, `#`, `%`, Cyrillic as is) and starts at the host root. Copies and moves between items of the same
+> `WebDavConnection` run on the server (`COPY` / `MOVE`, `Overwrite: F`; an existing destination folder is merged by
+> the caller). Uploads stream with a known length (a source of unknown length is buffered in a temp file first) to a
+> temp name and are moved over the destination when complete. WebDAV has no trash: `toRecycleBin: true` fails with
+> `NotSupportedException`. Only Basic authentication is supported — a server that offers Digest only fails with
+> `NotSupportedException`; use https.
 
 ### Yandex Disk
 
@@ -220,11 +255,13 @@ using FileVault.Core;
 using FileVault.Ftp;
 using FileVault.Local;
 using FileVault.GoogleDrive;
+using FileVault.WebDav;
 
 IFileProvider provider = location.Kind switch
 {
     LocationKind.Local => new LocalFileProvider(location.Path),
     LocationKind.Ftp => new FtpFileProvider(ftpClient, location.RemotePath),
+    LocationKind.WebDav => new WebDavFileProvider(webDavConnection, location.RemotePath),
     LocationKind.GoogleDrive => new GoogleDriveFileProvider(driveService, location.FolderId),
     _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
 };
@@ -251,8 +288,8 @@ var copyResult = await destProvider.CopyFileInAsync(
 await destProvider.MoveFileInAsync(sourceFileItem, destPath, progress);
 
 // Delete: toRecycleBin: true moves to the backend's trash (Local with ILocalRecycleBin, Yandex Disk,
-// Google Drive; GitHub deletes with a commit the history can undo); other providers return
-// Failure(NotSupportedException) and delete nothing.
+// Google Drive; GitHub deletes with a commit the history can undo); other providers (FTP, SFTP, WebDAV)
+// return Failure(NotSupportedException) and delete nothing.
 var deleted = await provider.DeleteAsync([item], toRecycleBin: true);
 if (deleted.Exception is NotSupportedException)
     deleted = await provider.DeleteAsync([item], toRecycleBin: false); // permanent — confirm with the user first
@@ -267,7 +304,7 @@ var dest = await provider.ResolveDestinationFileAsync(sourceFile, overwrite: fal
 
 ### Copying folders across providers
 
-`CopyFolderInAsync` returns `null` in `Result` — not an error — when the provider does not support native folder copying (FTP, SFTP, or cross-provider scenarios). The orchestrator is expected to recurse manually:
+`CopyFolderInAsync` returns `null` in `Result` — not an error — when the provider does not support native folder copying (FTP, SFTP, WebDAV onto an existing folder, or cross-provider scenarios). The orchestrator is expected to recurse manually:
 
 ```csharp
 async Task RecursiveCopyAsync(IFolderItem source, IFileProvider dest, string destPath)
@@ -298,11 +335,13 @@ Register authenticated clients, services, or app-specific factories. FileVault i
 ```csharp
 services.AddSingleton(driveService);
 services.AddSingleton(ftpClient);
+services.AddSingleton(webDavConnection);   // WebDavConnection: one per account, disposes its own HttpClient
 
 services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => location.Kind switch
 {
     LocationKind.Local => new LocalFileProvider(location.Path),
     LocationKind.Ftp => new FtpFileProvider(sp.GetRequiredService<AsyncFtpClient>(), location.RemotePath),
+    LocationKind.WebDav => new WebDavFileProvider(sp.GetRequiredService<WebDavConnection>(), location.RemotePath),
     LocationKind.GoogleDrive => new GoogleDriveFileProvider(
         sp.GetRequiredService<DriveService>(),
         location.FolderId),
@@ -338,6 +377,7 @@ public class MyProviderContractTests : FileProviderContractTests
 
 - .NET 10 SDK
 - Docker (for FTP integration tests via TestContainers)
+- [rclone](https://rclone.org) (for WebDAV integration tests: `rclone serve webdav` on a temp folder; set `RCLONE_PATH` if it is not on PATH)
 
 ### Build & Test
 
@@ -348,6 +388,10 @@ dotnet test tests/FileVault.Local.Tests
 
 # FTP integration tests (requires Docker)
 dotnet test tests/FileVault.Ftp.Tests --filter "Category=Integration"
+
+# WebDAV provider: unit tests run anywhere; contract and integration tests start `rclone serve webdav` (skipped without rclone)
+dotnet test tests/FileVault.WebDav.Tests --filter "Category!=Integration"
+dotnet test tests/FileVault.WebDav.Tests
 
 # GitHub provider: unit and contract tests run against an in-memory GitHub; the live test reads a public repo
 dotnet test tests/FileVault.GitHub.Tests --filter "Category!=Integration"
