@@ -8,7 +8,7 @@ A platform-independent .NET library for working with file systems. The single `I
 
 FileVault does not parse user-entered paths or choose a backend for an application. The client resolves its own routes, bookmarks, accounts, and credentials, then creates the appropriate `IFileProvider` directly.
 
-> **Supported backends:** Local FS · FTP/FTPS · SFTP · WebDAV (Nextcloud, ownCloud, Synology, Yandex Disk WebDAV, …) · Yandex Disk · Google Drive · Dropbox · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · WebDAV (Nextcloud, ownCloud, Synology, Yandex Disk WebDAV, …) · Yandex Disk · Google Drive · OneDrive (personal and work/school) · Dropbox · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
 
 ## Packages
 
@@ -22,6 +22,7 @@ FileVault does not parse user-entered paths or choose a backend for an applicati
 | `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
 | `FileVault.GoogleDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GoogleDrive.svg)](https://www.nuget.org/packages/FileVault.GoogleDrive) | Google Drive via Drive API v3 |
 | `FileVault.Dropbox` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Dropbox.svg)](https://www.nuget.org/packages/FileVault.Dropbox) | Dropbox via HTTP API v2 over HttpClient (AOT-safe, no SDK), with an OAuth 2 PKCE sign-in helper |
+| `FileVault.OneDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.OneDrive.svg)](https://www.nuget.org/packages/FileVault.OneDrive) | OneDrive via Microsoft Graph over plain HttpClient (NativeAOT-safe), with an OAuth PKCE sign-in helper |
 | `FileVault.GitHub` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GitHub.svg)](https://www.nuget.org/packages/FileVault.GitHub) | One branch of a GitHub repository via REST API: commits as writes, Git LFS reads, history |
 | `FileVault.Wsl` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Wsl.svg)](https://www.nuget.org/packages/FileVault.Wsl) | WSL distros via `\\wsl$\` UNC paths (Windows 10 1903+) |
 
@@ -36,6 +37,7 @@ dotnet add package FileVault.WebDav
 dotnet add package FileVault.YandexDisk
 dotnet add package FileVault.GoogleDrive
 dotnet add package FileVault.Dropbox
+dotnet add package FileVault.OneDrive
 dotnet add package FileVault.GitHub
 dotnet add package FileVault.Wsl        # Windows only
 ```
@@ -246,6 +248,49 @@ await auth.RevokeAsync(tokenSource.Current.AccessToken);
 > `files.content.write`, `sharing.read`, `sharing.write` (links), `account_info.read` (quota, always on),
 > `files.permanent_delete` only for Business apps. PKCE needs no app secret in the app. Register every loopback
 > redirect URI exactly, port included; the paste flow needs none.
+### OneDrive
+
+```csharp
+using FileVault.Core;
+using FileVault.OneDrive;
+
+// Sign-in (once per account): OAuth 2.0 authorization code + PKCE, public client — the app's own Entra client id,
+// no secret. Register "Mobile and desktop applications" with redirect URI http://localhost (any port works).
+var auth = new OneDriveAuth(httpClient, clientId: "<your-app-client-id>");   // authority "common"
+var request = auth.CreateAuthorizationRequest(new Uri($"http://localhost:{port}/"));
+// open request.Url in the system browser, wait for the redirect on the loopback listener, then:
+var code = OneDriveAuth.GetAuthorizationCode(request, callbackUri);        // checks state, throws on error
+OneDriveTokens tokens = await auth.RedeemCodeAsync(request, code);         // access, refresh, expiry
+// store tokens.RefreshToken securely; later: await auth.RefreshAsync(refreshToken) — it rotates
+
+// Tokens kept fresh (refresh before expiry and after a 401); persist the rotated refresh token
+var tokenSource = new OneDriveTokenSource(auth, tokens);
+tokenSource.TokensRefreshed += (_, t) => secureStore.Save(t.RefreshToken);
+
+// Any token source works: the client asks it again with forceRefresh: true after Graph answers 401
+var client = new OneDriveClient(httpClient, tokenSource.GetAccessTokenAsync);
+
+var drive = await client.GetDriveAsync();          // onedrive:root, quota in TotalSize / TotalFreeSpace
+var root = drive.CreateProvider();
+var folder = client.CreateProvider(folderId);     // onedrive:<item-id>
+var notes = await root.FindAsync("Documents/notes.md");
+
+// Find below a folder on the server (ISearchableFileProvider), share a public view link (IPublicLinkItem)
+await foreach (var hit in root.SearchAsync("budget")) Console.WriteLine(hit.FullName);
+if (notes is IPublicLinkItem shareable)
+{
+    var link = await shareable.GetPublicLinkAsync();   // anyone with the link can view
+    await shareable.RemovePublicLinkAsync();
+}
+```
+
+> Full names: `onedrive:root`, `onedrive:<item-id>` (stable across rename and move), and `onedrive:<parent-id>/<name>`
+> for a destination. Files over 4 MB go through an upload session (10 MiB fragments, resumable, cancelled sessions are
+> discarded); uploads from another provider replace a file of the same name, since the caller resolved the name first.
+> Copy and move within one `OneDriveClient` stay on the server. `toRecycleBin: true` uses the OneDrive recycle bin;
+> `false` is `permanentDelete`, and a drive that refuses it returns `NotSupportedException` without deleting anything.
+> 429/503 answers are retried after `Retry-After`. Files implement `IThumbnailItem`. Folders shared from other people's
+> drives are not listed.
 
 ### GitHub
 
@@ -322,6 +367,7 @@ using FileVault.Local;
 using FileVault.GoogleDrive;
 using FileVault.WebDav;
 using FileVault.Dropbox;
+using FileVault.OneDrive;
 
 IFileProvider provider = location.Kind switch
 {
@@ -330,6 +376,7 @@ IFileProvider provider = location.Kind switch
     LocationKind.WebDav => new WebDavFileProvider(webDavConnection, location.RemotePath),
     LocationKind.GoogleDrive => new GoogleDriveFileProvider(driveService, location.FolderId),
     LocationKind.Dropbox => dropboxClients[location.AccountId].CreateProvider(location.Path),
+    LocationKind.OneDrive => oneDriveClient.CreateProvider(location.FolderId),
     _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
 };
 ```
@@ -355,8 +402,8 @@ var copyResult = await destProvider.CopyFileInAsync(
 await destProvider.MoveFileInAsync(sourceFileItem, destPath, progress);
 
 // Delete: toRecycleBin: true moves to the backend's trash (Local with ILocalRecycleBin, Yandex Disk,
-// Google Drive, Dropbox's deleted files; GitHub deletes with a commit the history can undo); other providers
-// (FTP, SFTP, WebDAV) return Failure(NotSupportedException) and delete nothing.
+// Google Drive, OneDrive, Dropbox's deleted files; GitHub deletes with a commit the history can undo); other
+// providers (FTP, SFTP, WebDAV) return Failure(NotSupportedException) and delete nothing.
 var deleted = await provider.DeleteAsync([item], toRecycleBin: true);
 if (deleted.Exception is NotSupportedException)
     deleted = await provider.DeleteAsync([item], toRecycleBin: false); // permanent — confirm with the user first
@@ -432,6 +479,8 @@ services.AddSingleton(driveService);
 services.AddSingleton(ftpClient);
 services.AddSingleton(webDavConnection);   // WebDavConnection: one per account, disposes its own HttpClient
 services.AddSingleton(sp => new DropboxClient(sp.GetRequiredService<IDropboxTokenSource>(), sp.GetRequiredService<HttpClient>()));
+services.AddSingleton(sp => new OneDriveClient(sp.GetRequiredService<HttpClient>(),
+    sp.GetRequiredService<OneDriveTokenSource>().GetAccessTokenAsync));
 
 services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => location.Kind switch
 {
@@ -442,6 +491,7 @@ services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => loca
         sp.GetRequiredService<DriveService>(),
         location.FolderId),
     LocationKind.Dropbox => sp.GetRequiredService<DropboxClient>().CreateProvider(location.Path),
+    LocationKind.OneDrive => sp.GetRequiredService<OneDriveClient>().CreateProvider(location.FolderId),
     _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
 });
 ```
@@ -497,6 +547,9 @@ GITHUB_LIVE_TESTS=1 dotnet test tests/FileVault.GitHub.Tests --filter "Category=
 # Dropbox provider: contract and unit tests against an in-memory Dropbox; the live test reads a real account
 dotnet test tests/FileVault.Dropbox.Tests --filter "Category!=Integration"
 DROPBOX_ACCESS_TOKEN=sl.... dotnet test tests/FileVault.Dropbox.Tests --filter "Category=Integration"
+# OneDrive provider: unit and contract tests run against an in-memory Microsoft Graph; the live test only reads
+dotnet test tests/FileVault.OneDrive.Tests --filter "Category!=Integration"
+ONEDRIVE_ACCESS_TOKEN=eyJ0... dotnet test tests/FileVault.OneDrive.Tests --filter "Category=Integration"
 
 # Google Drive integration tests (requires a service account JSON)
 export GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON=/path/to/sa.json

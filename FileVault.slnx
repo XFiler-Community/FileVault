@@ -9,6 +9,7 @@
     <Project Path="src/FileVault.GoogleDrive/FileVault.GoogleDrive.csproj" />
     <Project Path="src/FileVault.GitHub/FileVault.GitHub.csproj" />
     <Project Path="src/FileVault.Dropbox/FileVault.Dropbox.csproj" />
+    <Project Path="src/FileVault.OneDrive/FileVault.OneDrive.csproj" />
     <Project Path="src/FileVault.Wsl/FileVault.Wsl.csproj" />
     <Project Path="src/FileVault.WebDav/FileVault.WebDav.csproj" />
   </Folder>
@@ -20,6 +21,7 @@
     <Project Path="tests/FileVault.GoogleDrive.Tests/FileVault.GoogleDrive.Tests.csproj" />
     <Project Path="tests/FileVault.GitHub.Tests/FileVault.GitHub.Tests.csproj" />
     <Project Path="tests/FileVault.Dropbox.Tests/FileVault.Dropbox.Tests.csproj" />
+    <Project Path="tests/FileVault.OneDrive.Tests/FileVault.OneDrive.Tests.csproj" />
     <Project Path="tests/FileVault.YandexDisk.Tests/FileVault.YandexDisk.Tests.csproj" />
     <Project Path="tests/FileVault.WebDav.Tests/FileVault.WebDav.Tests.csproj" />
   </Folder>

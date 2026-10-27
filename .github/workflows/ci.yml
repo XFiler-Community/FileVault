@@ -35,6 +35,7 @@ jobs:
           dotnet test tests/FileVault.GitHub.Tests --no-build --configuration Release --filter "Category!=Integration" --logger "trx;LogFileName=github-results.trx"
           dotnet test tests/FileVault.WebDav.Tests --no-build --configuration Release --filter "Category!=Integration" --logger "trx;LogFileName=webdav-results.trx"
           dotnet test tests/FileVault.Dropbox.Tests --no-build --configuration Release --filter "Category!=Integration" --logger "trx;LogFileName=dropbox-results.trx"
+          dotnet test tests/FileVault.OneDrive.Tests --no-build --configuration Release --filter "Category!=Integration" --logger "trx;LogFileName=onedrive-results.trx"
 
       - name: Upload test results
         if: always()
