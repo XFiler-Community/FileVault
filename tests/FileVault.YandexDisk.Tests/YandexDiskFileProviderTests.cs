@@ -196,6 +196,198 @@ public class YandexDiskFileProviderTests
         Assert.That(api.DownloadedLinks, Is.Empty);
     }
 
+    [Test]
+    public async Task SearchAsync_KeepsNameMatchesBelowFolder()
+    {
+        var api = new FakeDiskApi
+        {
+            AllFiles =
+            [
+                FileResource("disk:/Docs/Report.pdf"),
+                FileResource("disk:/Docs/notes.txt"),
+                FileResource("disk:/Docs/sub/annual report.txt"),
+                FileResource("disk:/Docs/Reports/a.bin"),
+                FileResource("disk:/Docs/Reports/b.bin"),
+                FileResource("disk:/Other/report.doc"),
+                FileResource("disk:/DocsOld/report.doc")
+            ],
+            GetInfo = r => FolderResource(r.Path)
+        };
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+
+        var found = await SearchAsync(provider, "REPORT");
+
+        Assert.That(found.Select(i => i.FullName), Is.EquivalentTo(new[]
+        {
+            "disk:/Docs/Report.pdf", "disk:/Docs/sub/annual report.txt", "disk:/Docs/Reports"
+        }));
+        Assert.That(found.Single(i => i.FullName == "disk:/Docs/Reports"), Is.InstanceOf<YandexDiskFolderItem>());
+        Assert.That(found.Where(i => i.FullName != "disk:/Docs/Reports"), Is.All.InstanceOf<YandexDiskFileItem>());
+        Assert.That(api.InfoRequests, Is.EqualTo(new[] { "disk:/Docs/Reports" }), "a folder is read once");
+    }
+
+    [Test]
+    public async Task SearchAsync_Root_FindsFoldersAtEveryDepth()
+    {
+        var api = new FakeDiskApi
+        {
+            AllFiles = [FileResource("disk:/Фото/Отпуск/фото.jpg"), FileResource("disk:/a.txt")],
+            GetInfo = r => FolderResource(r.Path)
+        };
+
+        var found = await SearchAsync(new YandexDiskFileProvider(api, "disk:/"), "ФОТО");
+
+        Assert.That(found.Select(i => i.FullName), Is.EquivalentTo(new[] { "disk:/Фото", "disk:/Фото/Отпуск/фото.jpg" }));
+    }
+
+    [Test]
+    public async Task SearchAsync_PathWithoutScheme_StillMatches()
+    {
+        var api = new FakeDiskApi { AllFiles = [FileResource("disk:/Docs/a.txt")] };
+
+        var found = await SearchAsync(new YandexDiskFileProvider(api, "/Docs/"), "a");
+
+        Assert.That(found.Select(i => i.FullName), Is.EqualTo(new[] { "disk:/Docs/a.txt" }));
+    }
+
+    [Test]
+    public async Task SearchAsync_PagesThroughTheWholeFileList()
+    {
+        var api = new FakeDiskApi
+        {
+            AllFiles = Enumerable.Range(0, 2500).Select(i => FileResource($"disk:/Docs/file{i}.txt")).ToList()
+        };
+
+        var found = await SearchAsync(new YandexDiskFileProvider(api, "disk:/Docs"), "file24");
+
+        Assert.That(found, Has.Count.EqualTo(111)); // file24, file240..249, file2400..2499
+        Assert.That(api.FileListOffsets, Is.EqualTo(new[] { 0, 1000, 2000 }));
+    }
+
+    [Test]
+    public async Task SearchAsync_ServerCapsThePage_KeepsPaging()
+    {
+        var api = new FakeDiskApi
+        {
+            MaxFilesPerPage = 100,
+            AllFiles = Enumerable.Range(0, 150).Select(i => FileResource($"disk:/f{i}.txt")).ToList()
+        };
+
+        var found = await SearchAsync(new YandexDiskFileProvider(api, "disk:/"), "f");
+
+        Assert.That(found, Has.Count.EqualTo(150));
+        Assert.That(api.FileListOffsets, Is.EqualTo(new[] { 0, 100 }));
+    }
+
+    [Test]
+    public async Task SearchAsync_FolderGoneMeanwhile_IsSkipped()
+    {
+        var api = new FakeDiskApi { AllFiles = [FileResource("disk:/Report/a.txt")] };
+
+        var found = await SearchAsync(new YandexDiskFileProvider(api, "disk:/"), "report");
+
+        Assert.That(found, Is.Empty);
+    }
+
+    [Test]
+    public async Task SearchAsync_EmptyQuery_FindsNothingWithoutRequest()
+    {
+        var api = new FakeDiskApi { AllFiles = [FileResource("disk:/a.txt")] };
+
+        Assert.That(await SearchAsync(new YandexDiskFileProvider(api, "disk:/"), ""), Is.Empty);
+        Assert.That(api.FileListOffsets, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetPublicLinkAsync_NotPublished_PublishesAndReturnsLink()
+    {
+        var api = PublishingApi();
+        var file = new YandexDiskFileItem(FileResource("disk:/Docs/a.txt"), api);
+
+        var result = await file.GetPublicLinkAsync();
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(result.Result, Is.EqualTo(new Uri("https://yadi.sk/d/1")));
+        Assert.That(api.Publishes, Is.EqualTo(new[] { "disk:/Docs/a.txt" }));
+    }
+
+    [Test]
+    public async Task GetPublicLinkAsync_AlreadyPublished_ReturnsExistingLink()
+    {
+        var api = PublishingApi();
+        api.Published["disk:/Photos"] = "https://yadi.sk/d/existing";
+        var folder = new YandexDiskFolderItem(FolderResource("disk:/Photos"), api);
+
+        var result = await folder.GetPublicLinkAsync();
+
+        Assert.That(result.Result, Is.EqualTo(new Uri("https://yadi.sk/d/existing")));
+        Assert.That(api.Publishes, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetPublicLinkAsync_ApiError_ReturnsFailure()
+    {
+        var api = new FakeDiskApi { GetInfo = _ => throw ApiError(HttpStatusCode.Forbidden) };
+        var file = new YandexDiskFileItem(FileResource("disk:/Docs/a.txt"), api);
+
+        var result = await file.GetPublicLinkAsync();
+
+        Assert.That(result.IsSuccess, Is.False);
+        Assert.That(result.Exception, Is.InstanceOf<YandexApiException>());
+    }
+
+    [Test]
+    public async Task RemovePublicLinkAsync_Published_Unpublishes()
+    {
+        var api = PublishingApi();
+        api.Published["disk:/Photos"] = "https://yadi.sk/d/existing";
+        var folder = new YandexDiskFolderItem(FolderResource("disk:/Photos"), api);
+
+        var result = await folder.RemovePublicLinkAsync();
+
+        Assert.That(result.IsSuccess && result.Result, Is.True, result.ErrorMessage);
+        Assert.That(api.Unpublishes, Is.EqualTo(new[] { "disk:/Photos" }));
+        Assert.That(api.Published, Is.Empty);
+    }
+
+    [Test]
+    public async Task RemovePublicLinkAsync_NoLink_SucceedsWithoutRequest()
+    {
+        var api = PublishingApi();
+        var file = new YandexDiskFileItem(FileResource("disk:/Docs/a.txt"), api);
+
+        var result = await file.RemovePublicLinkAsync();
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(result.Result, Is.False);
+        Assert.That(api.Unpublishes, Is.Empty);
+    }
+
+    private static FakeDiskApi PublishingApi()
+    {
+        var published = new Dictionary<string, string>();
+        return new FakeDiskApi
+        {
+            Published = published,
+            GetInfo = r => new Resource { Path = r.Path, PublicUrl = published.GetValueOrDefault(r.Path) }
+        };
+    }
+
+    private static async Task<List<IFileProviderItem>> SearchAsync(ISearchableFileProvider provider, string query)
+    {
+        var found = new List<IFileProviderItem>();
+        await foreach (var item in provider.SearchAsync(query))
+            found.Add(item);
+        return found;
+    }
+
+    private static Resource FolderResource(string path) => new()
+    {
+        Name = path[(path.LastIndexOf('/') + 1)..],
+        Path = path,
+        Type = ResourceType.Dir
+    };
+
     private static Resource FileResource(string path) => new()
     {
         Name = path[(path.LastIndexOf('/') + 1)..],
@@ -225,8 +417,48 @@ public class YandexDiskFileProviderTests
 
         public void Dispose() { }
 
+        public List<string> InfoRequests { get; } = [];
+
         public Task<Resource> GetInfoAsync(ResourceRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(GetInfo(request));
+        {
+            InfoRequests.Add(request.Path);
+            return Task.FromResult(GetInfo(request));
+        }
+
+        public List<Resource> AllFiles { get; init; } = [];
+        public int? MaxFilesPerPage { get; init; }
+        public List<int> FileListOffsets { get; } = [];
+
+        public Task<FilesResourceList> GetFilesInfoAsync(FilesResourceRequest request, CancellationToken cancellationToken = default)
+        {
+            var offset = request.Offset ?? 0;
+            var limit = Math.Min(request.Limit ?? 20, MaxFilesPerPage ?? int.MaxValue);
+            FileListOffsets.Add(offset);
+            return Task.FromResult(new FilesResourceList
+            {
+                Items = AllFiles.Skip(offset).Take(limit).ToList(),
+                Limit = limit,
+                Offset = offset
+            });
+        }
+
+        public Dictionary<string, string> Published { get; init; } = [];
+        public List<string> Publishes { get; } = [];
+        public List<string> Unpublishes { get; } = [];
+
+        public Task<Link> PublishAsync(string path, CancellationToken cancellationToken = default)
+        {
+            Publishes.Add(path);
+            Published[path] = $"https://yadi.sk/d/{Publishes.Count}";
+            return Task.FromResult(new Link { Href = path });
+        }
+
+        public Task<Link> UnpublishAsync(string path, CancellationToken cancellationToken = default)
+        {
+            Unpublishes.Add(path);
+            Published.Remove(path);
+            return Task.FromResult(new Link { Href = path });
+        }
 
         public Task<Link> CopyAsync(CopyFileRequest request, CancellationToken cancellationToken = default)
         {
@@ -285,11 +517,8 @@ public class YandexDiskFileProviderTests
 
         public Task<Disk> GetDiskInfoAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Resource> GetTrashInfoAsync(ResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<FilesResourceList> GetFilesInfoAsync(FilesResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<LastUploadedResourceList> GetLastUploadedInfoAsync(LastUploadedResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Resource> AppendCustomPropertiesAsync(string path, IDictionary<string, string?> properties, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Link> PublishAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Link> UnpublishAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Link> CreateDirectoryAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Link?> EmptyTrashAsync(string? path = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Link> RestoreFromTrashAsync(RestoreFromTrashRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

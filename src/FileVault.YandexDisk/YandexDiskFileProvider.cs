@@ -6,9 +6,10 @@ using FileVault.Core;
 
 namespace FileVault.YandexDisk;
 
-public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IFileProvider
+public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : ISearchableFileProvider
 {
     private const int PageSize = 20;
+    private const int SearchPageSize = 1000;
 
     public string Name => remotePath.TrimEnd('/').Split('/').Last() is { Length: > 0 } n ? n : "disk";
     public string FullName => remotePath;
@@ -44,6 +45,86 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IF
             offset += items.Count;
             if (items.Count < PageSize)
                 yield break;
+        }
+    }
+
+    /// <summary>
+    /// Yandex Disk's REST API has no search by name, so this pages through its flat list of every file on the disk
+    /// (<c>resources/files</c>, 1000 per request) and keeps those below this folder: a search costs as many requests
+    /// as the whole disk has thousands of files, whichever folder it starts in. That list holds files only. A folder
+    /// is found through the files inside it (at any depth) and read once for its metadata, so a folder with no file
+    /// anywhere below it is not found. An empty <paramref name="query"/> finds nothing.
+    /// </summary>
+    public async IAsyncEnumerable<IFileProviderItem> SearchAsync(string query,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (query.Length == 0)
+            yield break;
+
+        var prefix = SearchPrefix(remotePath);
+        var foundFolders = new HashSet<string>(StringComparer.Ordinal);
+        var offset = 0;
+
+        while (true)
+        {
+            var page = await api.MetaInfo.GetFilesInfoAsync(
+                new FilesResourceRequest { Limit = SearchPageSize, Offset = offset }, ct).ConfigureAwait(false);
+
+            var files = page.Items;
+            if (files.Count == 0)
+                yield break;
+
+            foreach (var file in files)
+            {
+                if (!file.Path.StartsWith(prefix, StringComparison.Ordinal))
+                    continue;
+
+                var segments = file.Path[prefix.Length..].Split('/');
+                var folderPath = prefix.TrimEnd('/');
+
+                for (var i = 0; i < segments.Length - 1; i++)
+                {
+                    folderPath += "/" + segments[i];
+
+                    if (!NameMatches(segments[i], query) || !foundFolders.Add(folderPath))
+                        continue;
+
+                    if (await GetFolderAsync(folderPath, ct).ConfigureAwait(false) is { } folder)
+                        yield return new YandexDiskFolderItem(folder, api);
+                }
+
+                if (NameMatches(file.Name, query))
+                    yield return new YandexDiskFileItem(file, api);
+            }
+
+            offset += files.Count;
+
+            // The server may cap the page below what was asked; it reports the limit it applied.
+            if (files.Count < (page.Limit > 0 ? page.Limit : SearchPageSize))
+                yield break;
+        }
+    }
+
+    private static bool NameMatches(string name, string query)
+        => name.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    // The flat list names paths "disk:/a/b.txt"; a provider may have been made for "/a" or "disk:/a/".
+    private static string SearchPrefix(string path)
+        => (path.StartsWith('/') ? "disk:" + path : path).TrimEnd('/') + "/";
+
+    // Null when the folder was deleted between the file listing and this read.
+    private async Task<Resource?> GetFolderAsync(string path, CancellationToken ct)
+    {
+        try
+        {
+            var resource = await api.MetaInfo.GetInfoAsync(new ResourceRequest { Path = path, Limit = 1 }, ct)
+                .ConfigureAwait(false);
+            return resource.Type == ResourceType.Dir ? resource : null;
+        }
+        catch (YandexApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
         }
     }
 

@@ -1,10 +1,8 @@
 using System.Net;
-using System.Text;
 using FileVault.Core;
 using Google.Apis.Drive.v3;
-using Google.Apis.Http;
-using Google.Apis.Services;
 using DriveFile = Google.Apis.Drive.v3.Data.File;
+using static FileVault.GoogleDrive.Tests.FakeDrive;
 
 namespace FileVault.GoogleDrive.Tests;
 
@@ -314,33 +312,11 @@ public class GoogleDriveTransferTests
         Assert.That(requests, Is.Zero);
     }
 
-    private static DriveService CreateService(Func<HttpRequestMessage, HttpResponseMessage> respond)
-        => new(new BaseClientService.Initializer
-        {
-            HttpClientFactory = new FakeHttpClientFactory(new FakeHandler(respond)),
-            ApplicationName = "FileVault.Tests",
-            GZipEnabled = false
-        });
-
-    private static HttpResponseMessage Json(HttpStatusCode status, string json)
-        => new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
-
     private static HttpResponseMessage ResumableSession()
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("") };
         response.Headers.Location = new Uri("https://www.googleapis.com/upload/drive/v3/files?upload_id=session");
         return response;
-    }
-
-    private sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => Task.FromResult(respond(request));
-    }
-
-    private sealed class FakeHttpClientFactory(HttpMessageHandler handler) : HttpClientFactory
-    {
-        protected override HttpMessageHandler CreateHandler(CreateHttpClientArgs args) => handler;
     }
 
     private sealed class FakeFileItem(string name, byte[] content) : IFileItem

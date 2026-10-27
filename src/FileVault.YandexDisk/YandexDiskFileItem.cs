@@ -6,7 +6,7 @@ using FileVault.Core;
 
 namespace FileVault.YandexDisk;
 
-public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api) : IThumbnailItem
+public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api) : IThumbnailItem, IPublicLinkItem
 {
     internal IDiskApi Api => api;
 
@@ -30,6 +30,14 @@ public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api) 
     public async Task DeleteAsync(CancellationToken ct = default)
         => await api.Commands.DeleteAndWaitAsync(
             new DeleteFileRequest { Path = resource.Path, Permanently = true }, ct).ConfigureAwait(false);
+
+    /// <summary>Publishes the file on Yandex Disk; an already published file keeps its link.</summary>
+    public Task<FileOperationResult<Uri>> GetPublicLinkAsync(CancellationToken ct = default)
+        => YandexDiskPublicLink.GetAsync(api, resource.Path, ct);
+
+    /// <summary>Unpublishes the file. The result is true when a link was removed, false when it had none.</summary>
+    public Task<FileOperationResult<bool>> RemovePublicLinkAsync(CancellationToken ct = default)
+        => YandexDiskPublicLink.RemoveAsync(api, resource.Path, ct);
 
     public bool HasThumbnail => resource.Preview is not null;
 
