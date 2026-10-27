@@ -18,6 +18,7 @@ src/
   FileVault.WebDav/        ← WebDAV over HttpClient + System.Xml; no extra packages, AOT-safe
   FileVault.Dropbox/       ← Dropbox HTTP API v2 over HttpClient; no SDK, AOT-safe JSON; OAuth 2 PKCE helper
   FileVault.OneDrive/      ← Microsoft Graph over HttpClient (no Graph SDK / MSAL), AOT-safe JSON; OAuth PKCE helper
+  FileVault.S3/            ← S3-compatible REST over HttpClient with its own SigV4; no AWS SDK, AOT-safe (LINQ to XML)
   FileVault.Wsl/           ← Windows-only; depends on FileVault.Local (not Core directly)
   FileVault.Cli/           ← example only; not a NuGet package
 tests/
@@ -31,6 +32,7 @@ tests/
   FileVault.WebDav.Tests/      ← unit tests (PROPFIND parsing, paths, canned handler) + contract/integration against `rclone serve webdav`
   FileVault.Dropbox.Tests/     ← contract + unit tests on an in-memory Dropbox (FakeDropbox); live read test opt-in
   FileVault.OneDrive.Tests/    ← contract + unit tests on an in-memory Graph (FakeGraph); live read test opt-in
+  FileVault.S3.Tests/          ← SigV4 vectors, contract + unit tests on an in-memory S3 (FakeS3); Integration: rclone serve s3
 ```
 
 ---
@@ -209,6 +211,7 @@ FileVault providers expose `FullName` values, but user-entered path parsing and 
 | GitHub | `github:<owner>/<repo>@<branch>:/<path>` | Branch may hold `/`, never `:`; `GitHubPath.TryParse` refuses `..` and `.git` |
 | WebDAV | `webdavs://host[:port]/path` (https) · `webdav://host[:port]/path` (http) | `path` decoded, from the host root (includes the base URI's path), no trailing slash; not a URL — `#`, `%`, spaces as is |
 | OneDrive | `onedrive:root` (root) · `onedrive:<item-id>` (any item) · `onedrive:<parent-id>/<name>` (destination) | Ids survive rename/move; one `OneDriveClient` = one account's `/me/drive` |
+| S3 | `s3://<endpoint host[:port]>/<bucket>/` (root) · `s3://<host>/<bucket>/<key>` | Folder without its trailing slash; keys raw, not escaped |
 | WSL | `\\wsl$\<distro>\` | Windows only; use `FileVault.Local` against the UNC path |
 
 Clients decide whether to use these strings, their own saved-location model, or another route format.
@@ -293,6 +296,29 @@ Clients decide whether to use these strings, their own saved-location model, or 
   parent ids) since Graph does not document that a folder search stays inside the folder.
 - Public link: the item's own (non-inherited) anonymous `view` link, else `createLink` view/anonymous; removing deletes
   those permissions only.
+## S3 provider — decisions
+
+- `S3Connection` = one bucket + credentials (init-only). "Same provider" = `IsSameAccount` (endpoint scheme/host/port,
+  region, access key id), so copies and moves between buckets of one account stay server-side; renames and deletes
+  need the same bucket (`IsSameBucket`).
+- No AWS SDK: `S3Signer` is SigV4 (checked against AWS's published vectors); the canonical URI is encoded once (S3
+  rule) and the request goes out with `DangerousDisablePathAndQueryCanonicalization`, so the wire path is the signed
+  one. Streamed single PUTs are signed `UNSIGNED-PAYLOAD`; buffered bodies (parts, small PUTs) carry their SHA-256.
+- Folders are common prefixes (`delimiter=/`); `CreateFolderAsync` writes a zero-byte `name/` marker; a listing
+  never shows the folder's own marker. `ContainsFolderAsync` looks at the parent's listing, so servers over a file
+  system (rclone, which shows empty directories only that way) answer too.
+- Uploads: known length ≤ `MultipartThreshold` → one streamed PUT; otherwise parts of `PartSize` read into one reused
+  buffer (a source ending within the first part → one PUT). Any failure or cancel aborts the multipart upload with
+  its own 30 s timeout. S3 commits whole objects, so no partial-file dance is needed.
+- Server copy: `CopyObject` up to `MultipartCopyThreshold` (≤ 5 GB), above it `UploadPartCopy` ranges; a 501 /
+  `NotImplemented`, or a 200 without `CopyPartResult` (rclone takes it for an empty UploadPart), falls back to
+  streaming through the client. Folder copy/move = every key under the prefix, then (move) `DeleteObjects` in
+  batches of 1000 — only after every copy landed.
+- `toRecycleBin: true` → `Failure(NotSupportedException)` before any request. `SearchAsync` lists all keys under
+  the prefix without a delimiter and yields matching files and implied folders (once each). No `IPublicLinkItem`:
+  presigned URLs expire.
+- `rclone serve s3` stores keys as files, so it cannot keep folder markers: the rclone contract fixture skips
+  `CreateFolderAsync_ReturnsItemAndCreatesDirectory`; `FakeS3` covers markers and `UploadPartCopy`.
 
 ## IFileRevisionsItem
 
@@ -316,7 +342,7 @@ Optional: a file whose provider keeps a small picture of it. `HasThumbnail` is k
 - OneDrive: `HasThumbnail` is guessed from the listing (image/photo/video facets, Office/PDF/picture extensions) — work/school
   drives cannot `$expand=thumbnails` on children. `thumbnails/0/c{size}x{size}/content` (redirect to storage, no
   token), falling back to small/medium/large on 400; 404 → null.
-- Local, FTP, SFTP, GitHub, WebDAV do not implement it: a client reads the file itself if it wants a picture.
+- Local, FTP, SFTP, GitHub, WebDAV, S3 do not implement it: a client reads the file itself if it wants a picture.
 
 ## ISearchableFileProvider
 
@@ -344,6 +370,8 @@ Drive file and folder items (not by placeholders). `RemovePublicLinkAsync` retur
   `create_shared_link_with_settings`).
 - OneDrive: see "OneDrive provider — decisions" (search through `search(q=…)` kept to the folder's subtree, links
   through `createLink` type `view` scope `anonymous`).
+- S3 searches (`ListObjectsV2` without a delimiter, names filtered here) but has no public links: presigned URLs
+  expire.
 
 ## IOpenableItem
 
@@ -397,9 +425,11 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`) + non-integration `FileVault.WebDav.Tests` (parsing, canned handler) + non-integration `FileVault.Dropbox.Tests` (`FakeDropbox`) + non-integration `FileVault.OneDrive.Tests` (`FakeGraph`).
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`) + non-integration `FileVault.WebDav.Tests` (parsing, canned handler) + non-integration `FileVault.Dropbox.Tests` (`FakeDropbox`) + non-integration `FileVault.OneDrive.Tests` (`FakeGraph`) + `FileVault.S3.Tests` without the rclone fixture (`FakeS3`).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via NuGet Trusted Publishing (no API key: a nuget.org policy for this repo and `publish.yml`, plus the `NUGET_USER` secret — the nuget.org profile name of the policy's creator).
 - FTP, Google Drive and WebDAV integration tests are **not** run in CI (require Docker / service account / rclone).
+- `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via NuGet Trusted Publishing (no API key: a nuget.org policy for this repo and `publish.yml`, plus the `NUGET_USER` secret — the nuget.org profile name of the policy's creator).
+- FTP, Google Drive and S3 integration tests are **not** run in CI (require Docker / service account / rclone).
 
 ---
 
