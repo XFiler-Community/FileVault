@@ -15,6 +15,7 @@ src/
   FileVault.YandexDisk/    ← XFiler.YandexDisk.Client
   FileVault.GoogleDrive/   ← Google.Apis.Drive.v3
   FileVault.GitHub/        ← GitHub REST + Git LFS batch API over HttpClient; no extra packages, AOT-safe JSON
+  FileVault.WebDav/        ← WebDAV over HttpClient + System.Xml; no extra packages, AOT-safe
   FileVault.Wsl/           ← Windows-only; depends on FileVault.Local (not Core directly)
   FileVault.Cli/           ← example only; not a NuGet package
 tests/
@@ -25,6 +26,7 @@ tests/
   FileVault.GoogleDrive.Tests/
   FileVault.YandexDisk.Tests/  ← unit tests on a fake IDiskApi
   FileVault.GitHub.Tests/      ← contract + unit tests on an in-memory GitHub (FakeGitHub); live read test opt-in
+  FileVault.WebDav.Tests/      ← unit tests (PROPFIND parsing, paths, canned handler) + contract/integration against `rclone serve webdav`
 ```
 
 ---
@@ -173,7 +175,7 @@ await using (src)
 A cancelled or failed copy must leave no partial destination file, and a failed Replace must keep the old content:
 
 - Write to a temp file in the destination folder named `<name>.filevault-partial-<guid:N>` (drop `<name>` if it is over 200 chars), opened with `CreateNew`.
-- Only after the copy completed, swap it in: Local — `File.Move(temp, destination, overwrite: true)`; SFTP — `posix-rename@openssh.com`, falling back to delete + rename when the server lacks it.
+- Only after the copy completed, swap it in: Local — `File.Move(temp, destination, overwrite: true)`; SFTP — `posix-rename@openssh.com`, falling back to delete + rename when the server lacks it; WebDAV — `MOVE` with `Overwrite: F`, and on 412 `Overwrite: T` unless the destination is a folder.
 - On any exception delete the temp file (best effort, SFTP with its own short timeout since `ct` is already cancelled) and rethrow into the method's `Failure`.
 - Same-folder temp keeps the final move a rename on the same volume. Backends that commit an upload atomically (Google Drive, Yandex Disk) don't need this.
 
@@ -200,6 +202,7 @@ FileVault providers expose `FullName` values, but user-entered path parsing and 
 | Yandex Disk | `disk:/` (root) · `disk:/path` (subfolder) | |
 | Google Drive | `gdrive:root` (root) · `gdrive:<fileId>` (subfolder) | |
 | GitHub | `github:<owner>/<repo>@<branch>:/<path>` | Branch may hold `/`, never `:`; `GitHubPath.TryParse` refuses `..` and `.git` |
+| WebDAV | `webdavs://host[:port]/path` (https) · `webdav://host[:port]/path` (http) | `path` decoded, from the host root (includes the base URI's path), no trailing slash; not a URL — `#`, `%`, spaces as is |
 | WSL | `\\wsl$\<distro>\` | Windows only; use `FileVault.Local` against the UNC path |
 
 Clients decide whether to use these strings, their own saved-location model, or another route format.
@@ -220,6 +223,16 @@ Clients decide whether to use these strings, their own saved-location model, or 
 - `ListRecursiveAsync(folder)` reads a whole subtree with one `git/trees/{sha}?recursive=1` and caches every tree in the answer, so listings below it cost no request; a recursive walk that is already fully cached costs none either. When GitHub answers `truncated: true` it reads that level alone and each subfolder the same way. `resolveLfsSizes: false` skips the pointer reads (sizes stay pointer sizes) for whole-repository scans.
 - `ChangedDate` = date of the listed head commit; per-file dates come from `GetCommitsAsync(path)`.
 
+## WebDAV provider — decisions
+
+- `WebDavConnection` (init-only: `BaseUri`, `UserName`, `Password`, optional `HttpClient` / `Handler`, `DisplayName`) = one account. "Same provider" = `ReferenceEquals(item.Connection, connection)`: only then COPY / MOVE run on the server.
+- Basic auth, sent with every request. A 401 whose `WWW-Authenticate` offers no Basic (Digest / NTLM only) is `NotSupportedException`; other HTTP errors are `WebDavException` (an `IOException` with `StatusCode`).
+- Paths inside are server paths: decoded, from the host root, no trailing slash. URLs are built by `Uri.EscapeDataString` per segment; hrefs are decoded as text (not through `Uri`), so an unencoded `#` or `?` from a sloppy server still names the right file. Listing children = folder path + last href segment, which survives proxies that rewrite href prefixes.
+- PROPFIND parsing matches `DAV:` (or no namespace) by local name — prefixes differ between servers — and reads only 2xx `propstat`s. DTDs are refused.
+- Native COPY / MOVE always start with `Overwrite: F`. Folders: 412 → `Success(null)`, the caller merges item by item (`Overwrite: T` would delete the existing folder). Files: 412 → replace through a temp copy / `Overwrite: T`, never over a folder.
+- PUT always carries a Content-Length (many servers refuse chunked PUT); a source of unknown length is buffered with `TemporaryFileBuffer` first. Uploads follow [Partial files](#partial-files): PUT to the temp name, then MOVE.
+- No trash: `toRecycleBin: true` → `Failure(NotSupportedException)` before any request. `IDriveItem` quota from `quota-used-bytes` / `quota-available-bytes` (RFC 4331); negative or missing → 0.
+
 ## IFileRevisionsItem
 
 Optional, like `IOpenableItem`: a file whose provider keeps past states. Only `GoogleDriveFileItem` implements it
@@ -236,7 +249,7 @@ Optional: a file whose provider keeps a small picture of it. `HasThumbnail` is k
 - Yandex Disk: the listing's `preview` link (size S, 150 px); its `size` query parameter is set to the nearest larger of
   S/M/L/XL/XXL/XXXL, and if that is refused the link is used as listed. Downloaded through `IFilesClient`, which adds
   the OAuth header.
-- Local, FTP, SFTP, GitHub do not implement it: a client reads the file itself if it wants a picture.
+- Local, FTP, SFTP, GitHub, WebDAV do not implement it: a client reads the file itself if it wants a picture.
 
 ## ISearchableFileProvider
 
@@ -313,9 +326,9 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`).
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`) + non-integration `FileVault.WebDav.Tests` (parsing, canned handler).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via NuGet Trusted Publishing (no API key: a nuget.org policy for this repo and `publish.yml`, plus the `NUGET_USER` secret — the nuget.org profile name of the policy's creator).
-- FTP and Google Drive integration tests are **not** run in CI (require Docker / service account).
+- FTP, Google Drive and WebDAV integration tests are **not** run in CI (require Docker / service account / rclone).
 
 ---
 
