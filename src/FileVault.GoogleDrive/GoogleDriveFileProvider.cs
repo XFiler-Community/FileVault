@@ -4,13 +4,14 @@ using DriveFile = Google.Apis.Drive.v3.Data.File;
 
 namespace FileVault.GoogleDrive;
 
-public sealed class GoogleDriveFileProvider(DriveService service, string folderId) : IFileProvider
+public sealed class GoogleDriveFileProvider(DriveService service, string folderId) : ISearchableFileProvider
 {
     private const string FolderMimeType = GoogleDriveMimeTypes.Folder;
     private const string Scheme = "gdrive:";
     private const string ListFields = "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, thumbnailLink)";
+    private const string RootAlias = "root";
 
-    public string Name => folderId == "root" ? "Google Drive" : folderId;
+    public string Name => folderId == RootAlias ? "Google Drive" : folderId;
     public string FullName => $"{Scheme}{folderId}";
 
     public async IAsyncEnumerable<IFileProviderItem> GetItemsAsync(FileProviderFilter filter,
@@ -41,6 +42,64 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
             pageToken = result.NextPageToken;
         }
         while (pageToken != null);
+    }
+
+    /// <summary>
+    /// Drive's <c>name contains</c> search, without trashed items, kept to items below this folder by walking their
+    /// parents up (each ancestor folder is read once per search); for <c>root</c> that is everything in My Drive, not
+    /// items only shared with the user. Drive matches the query against the start of the words of a name: "report"
+    /// finds "Annual report.pdf" and "reports.txt" but not "myreport.txt". Shared drives are not searched. An empty
+    /// <paramref name="query"/> finds nothing.
+    /// </summary>
+    public async IAsyncEnumerable<IFileProviderItem> SearchAsync(string query,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (query.Length == 0)
+            yield break;
+
+        var ancestry = new GoogleDriveAncestry(service, await GetFolderIdAsync(ct).ConfigureAwait(false));
+        string? pageToken = null;
+
+        do
+        {
+            var request = service.Files.List();
+            request.Q = BuildSearchQuery(query);
+            request.Fields = ListFields;
+            request.Spaces = "drive";
+            request.PageSize = 1000;
+            request.PageToken = pageToken;
+
+            var result = await request.ExecuteAsync(ct).ConfigureAwait(false);
+
+            foreach (var file in result.Files ?? [])
+            {
+                if (!await ancestry.IsBelowAsync(file, ct).ConfigureAwait(false))
+                    continue;
+
+                if (file.MimeType == FolderMimeType)
+                    yield return new GoogleDriveFolderItem(file, service);
+                else
+                    yield return new GoogleDriveFileItem(file, service);
+            }
+
+            pageToken = result.NextPageToken;
+        }
+        while (pageToken != null);
+    }
+
+    private static string BuildSearchQuery(string query) => $"name contains '{EscapeQuery(query)}' and trashed = false";
+
+    // Parents name My Drive's root by its real id, never by the "root" alias.
+    private async Task<string> GetFolderIdAsync(CancellationToken ct)
+    {
+        if (folderId != RootAlias)
+            return folderId;
+
+        var request = service.Files.Get(RootAlias);
+        request.Fields = "id";
+        var root = await request.ExecuteAsync(ct).ConfigureAwait(false);
+        return root.Id;
     }
 
     /// <summary>

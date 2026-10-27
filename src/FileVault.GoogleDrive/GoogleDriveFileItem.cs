@@ -8,7 +8,7 @@ using DriveFile = Google.Apis.Drive.v3.Data.File;
 namespace FileVault.GoogleDrive;
 
 public sealed partial class GoogleDriveFileItem(DriveFile file, DriveService service)
-    : IFileRevisionsItem, IThumbnailItem
+    : IFileRevisionsItem, IThumbnailItem, IPublicLinkItem
 {
     private const string RevisionFields =
         "nextPageToken, revisions(id, modifiedTime, size, md5Checksum, lastModifyingUser(displayName))";
@@ -99,6 +99,19 @@ public sealed partial class GoogleDriveFileItem(DriveFile file, DriveService ser
 
     public async Task DeleteAsync(CancellationToken ct = default)
         => await service.Files.Delete(file.Id).ExecuteAsync(ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Shares the file as "anyone with the link" (viewer) and returns its <c>webViewLink</c>; when anyone can open
+    /// it already, its link is returned and the sharing is left as it is.
+    /// </summary>
+    public Task<FileOperationResult<Uri>> GetPublicLinkAsync(CancellationToken ct = default)
+        => GoogleDrivePublicLink.GetAsync(service, file.Id, ct);
+
+    /// <summary>
+    /// Removes every "anyone" permission of the file. The result is true when a link was removed, false when it had none.
+    /// </summary>
+    public Task<FileOperationResult<bool>> RemovePublicLinkAsync(CancellationToken ct = default)
+        => GoogleDrivePublicLink.RemoveAsync(service, file.Id, ct);
 
     public bool HasThumbnail => file.ThumbnailLink is not null;
 
