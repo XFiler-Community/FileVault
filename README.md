@@ -8,7 +8,7 @@ A platform-independent .NET library for working with file systems. The single `I
 
 FileVault does not parse user-entered paths or choose a backend for an application. The client resolves its own routes, bookmarks, accounts, and credentials, then creates the appropriate `IFileProvider` directly.
 
-> **Supported backends:** Local FS · FTP/FTPS · SFTP · WebDAV (Nextcloud, ownCloud, Synology, Yandex Disk WebDAV, …) · Yandex Disk · Google Drive · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · WebDAV (Nextcloud, ownCloud, Synology, Yandex Disk WebDAV, …) · Yandex Disk · Google Drive · Dropbox · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
 
 ## Packages
 
@@ -21,6 +21,7 @@ FileVault does not parse user-entered paths or choose a backend for an applicati
 | `FileVault.WebDav` | [![NuGet](https://img.shields.io/nuget/v/FileVault.WebDav.svg)](https://www.nuget.org/packages/FileVault.WebDav) | Any WebDAV server over HttpClient (Basic auth), no extra dependencies, AOT-compatible |
 | `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
 | `FileVault.GoogleDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GoogleDrive.svg)](https://www.nuget.org/packages/FileVault.GoogleDrive) | Google Drive via Drive API v3 |
+| `FileVault.Dropbox` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Dropbox.svg)](https://www.nuget.org/packages/FileVault.Dropbox) | Dropbox via HTTP API v2 over HttpClient (AOT-safe, no SDK), with an OAuth 2 PKCE sign-in helper |
 | `FileVault.GitHub` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GitHub.svg)](https://www.nuget.org/packages/FileVault.GitHub) | One branch of a GitHub repository via REST API: commits as writes, Git LFS reads, history |
 | `FileVault.Wsl` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Wsl.svg)](https://www.nuget.org/packages/FileVault.Wsl) | WSL distros via `\\wsl$\` UNC paths (Windows 10 1903+) |
 
@@ -34,6 +35,7 @@ dotnet add package FileVault.Sftp
 dotnet add package FileVault.WebDav
 dotnet add package FileVault.YandexDisk
 dotnet add package FileVault.GoogleDrive
+dotnet add package FileVault.Dropbox
 dotnet add package FileVault.GitHub
 dotnet add package FileVault.Wsl        # Windows only
 ```
@@ -172,7 +174,7 @@ if (await root.FindAsync("Projects/art-life/notes.md") is IFileRevisionsItem not
     var (stream, length) = await notes.OpenRevisionAsync(revisions[^2]);
 }
 
-// A picture of a file without downloading it (Google Drive and Yandex Disk files implement IThumbnailItem)
+// A picture of a file without downloading it (Google Drive, Yandex Disk and Dropbox files implement IThumbnailItem)
 await foreach (var item in root.GetItemsAsync(FileProviderFilter.Default))
 {
     if (item is IThumbnailItem { HasThumbnail: true } pictured)
@@ -181,6 +183,69 @@ await foreach (var item in root.GetItemsAsync(FileProviderFilter.Default))
 ```
 
 > **Authentication** is the caller's responsibility. Pass any `DriveService` — OAuth2 user, service account, or impersonation. See [Google Auth Library docs](https://developers.google.com/api-client-library/dotnet/guide/aaa_oauth).
+
+### Dropbox
+
+```csharp
+using FileVault.Core;
+using FileVault.Dropbox;
+
+// Sign-in: OAuth 2 code flow with PKCE for a public client — the app key only, no secret — with offline access
+var auth = new DropboxAuth("your-app-key", httpClient);
+
+// a) Paste flow: no redirect URI; Dropbox shows a code the user pastes into the app
+var request = auth.CreateAuthorizationRequest();
+OpenBrowser(request.AuthorizeUri);
+var tokens = await auth.ExchangeCodeAsync(request, pastedCode);
+
+// b) Loopback flow: a redirect URI registered exactly (port and path) in the App Console
+var loopback = auth.CreateAuthorizationRequest(new Uri("http://127.0.0.1:53682/dropbox"));
+OpenBrowser(loopback.AuthorizeUri);
+var code = DropboxAuth.ParseRedirect(loopback, uriTheListenerReceived);   // checks state, throws on access_denied
+tokens = await auth.ExchangeCodeAsync(loopback, code);
+
+// tokens: AccessToken (about 4 hours), RefreshToken (store it as a secret), ExpiresAt, AccountId.
+// The token source refreshes before expiry and after a 401 expired_access_token, and hands new tokens back to store.
+var tokenSource = new DropboxRefreshingTokenSource(auth, tokens, (fresh, ct) => SaveAsync(fresh, ct));
+var client = new DropboxClient(tokenSource, httpClient);
+// or: new DropboxClient(ct => myTokenStore.GetValidAccessTokenAsync(ct), httpClient)
+
+var drive = await client.GetDriveAsync();          // dropbox:/ with TotalSize / TotalFreeSpace
+var root = drive.CreateProvider();
+var photos = client.CreateProvider("/Photos");     // FullName: dropbox:/Photos
+
+// Search below a folder on Dropbox's side; public view-only links; thumbnails
+await foreach (var found in photos.SearchAsync("beach")) { /* dropbox:/Photos/2024/beach.jpg */ }
+
+if (file is IPublicLinkItem shareable)
+{
+    var link = await shareable.GetPublicLinkAsync();   // existing link returned as it is
+    await shareable.RemovePublicLinkAsync();
+}
+
+if (file is IThumbnailItem { HasThumbnail: true } pictured)
+    await using (var thumbnail = await pictured.OpenThumbnailAsync(256)) { /* JPEG */ }
+
+// Sign out
+await auth.RevokeAsync(tokenSource.Current.AccessToken);
+```
+
+> `FullName` is `dropbox:/` for the root and `dropbox:/<path>` below it, with Dropbox's display casing; Dropbox
+> compares paths case-insensitively (`DropboxPath.AreSame`). A full name does not name the account — an app with
+> several accounts keeps that next to it. Items of one `DropboxClient` count as the same provider: copies and moves
+> between them run on Dropbox (`copy_v2` / `move_v2`, a batch job past 10 000 entries). Uploads go in one
+> `files/upload` request up to `SimpleUploadLimit` (150 MB; give the `HttpClient` a timeout long enough for that, or
+> lower the limit) and through an upload session in `UploadChunkSize` chunks (8 MB) above it; Dropbox commits the
+> file at the end, so a cancelled upload leaves nothing behind. Copying onto an existing file replaces it (the old
+> content stays in Dropbox's version history or deleted files). **Delete:** `toRecycleBin: true` is `delete_v2` —
+> restorable for the account's retention period; `toRecycleBin: false` is `permanently_delete`, which Dropbox allows
+> Dropbox Business apps only: elsewhere the delete fails and nothing else is tried. 429 `Retry-After` is waited out up
+> to `MaxRateLimitRetries` times (at most `MaxRetryAfter` each).
+>
+> **App Console:** permission type *Scoped access*; scopes `files.metadata.read`, `files.content.read`,
+> `files.content.write`, `sharing.read`, `sharing.write` (links), `account_info.read` (quota, always on),
+> `files.permanent_delete` only for Business apps. PKCE needs no app secret in the app. Register every loopback
+> redirect URI exactly, port included; the paste flow needs none.
 
 ### GitHub
 
@@ -256,6 +321,7 @@ using FileVault.Ftp;
 using FileVault.Local;
 using FileVault.GoogleDrive;
 using FileVault.WebDav;
+using FileVault.Dropbox;
 
 IFileProvider provider = location.Kind switch
 {
@@ -263,6 +329,7 @@ IFileProvider provider = location.Kind switch
     LocationKind.Ftp => new FtpFileProvider(ftpClient, location.RemotePath),
     LocationKind.WebDav => new WebDavFileProvider(webDavConnection, location.RemotePath),
     LocationKind.GoogleDrive => new GoogleDriveFileProvider(driveService, location.FolderId),
+    LocationKind.Dropbox => dropboxClients[location.AccountId].CreateProvider(location.Path),
     _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
 };
 ```
@@ -288,8 +355,8 @@ var copyResult = await destProvider.CopyFileInAsync(
 await destProvider.MoveFileInAsync(sourceFileItem, destPath, progress);
 
 // Delete: toRecycleBin: true moves to the backend's trash (Local with ILocalRecycleBin, Yandex Disk,
-// Google Drive; GitHub deletes with a commit the history can undo); other providers (FTP, SFTP, WebDAV)
-// return Failure(NotSupportedException) and delete nothing.
+// Google Drive, Dropbox's deleted files; GitHub deletes with a commit the history can undo); other providers
+// (FTP, SFTP, WebDAV) return Failure(NotSupportedException) and delete nothing.
 var deleted = await provider.DeleteAsync([item], toRecycleBin: true);
 if (deleted.Exception is NotSupportedException)
     deleted = await provider.DeleteAsync([item], toRecycleBin: false); // permanent — confirm with the user first
@@ -364,6 +431,7 @@ Register authenticated clients, services, or app-specific factories. FileVault i
 services.AddSingleton(driveService);
 services.AddSingleton(ftpClient);
 services.AddSingleton(webDavConnection);   // WebDavConnection: one per account, disposes its own HttpClient
+services.AddSingleton(sp => new DropboxClient(sp.GetRequiredService<IDropboxTokenSource>(), sp.GetRequiredService<HttpClient>()));
 
 services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => location.Kind switch
 {
@@ -373,6 +441,7 @@ services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => loca
     LocationKind.GoogleDrive => new GoogleDriveFileProvider(
         sp.GetRequiredService<DriveService>(),
         location.FolderId),
+    LocationKind.Dropbox => sp.GetRequiredService<DropboxClient>().CreateProvider(location.Path),
     _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
 });
 ```
@@ -424,6 +493,10 @@ dotnet test tests/FileVault.WebDav.Tests
 # GitHub provider: unit and contract tests run against an in-memory GitHub; the live test reads a public repo
 dotnet test tests/FileVault.GitHub.Tests --filter "Category!=Integration"
 GITHUB_LIVE_TESTS=1 dotnet test tests/FileVault.GitHub.Tests --filter "Category=Integration"
+
+# Dropbox provider: contract and unit tests against an in-memory Dropbox; the live test reads a real account
+dotnet test tests/FileVault.Dropbox.Tests --filter "Category!=Integration"
+DROPBOX_ACCESS_TOKEN=sl.... dotnet test tests/FileVault.Dropbox.Tests --filter "Category=Integration"
 
 # Google Drive integration tests (requires a service account JSON)
 export GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON=/path/to/sa.json

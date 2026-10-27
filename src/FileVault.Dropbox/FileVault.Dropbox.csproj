@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Dropbox provider for FileVault. Implements IFileProvider over the Dropbox HTTP API v2 with a plain HttpClient (no SDK, NativeAOT-safe): chunked upload sessions, server-side copy and move, thumbnails, search, public links, quota, and an OAuth 2 PKCE helper for desktop apps.</Description>
+    <PackageTags>file-manager;file-provider;dropbox;cloud;storage;cross-platform</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileVault.Core\FileVault.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileVault.Dropbox.Tests" />
+  </ItemGroup>
+
+</Project>

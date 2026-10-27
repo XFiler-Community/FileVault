@@ -16,6 +16,7 @@ src/
   FileVault.GoogleDrive/   ← Google.Apis.Drive.v3
   FileVault.GitHub/        ← GitHub REST + Git LFS batch API over HttpClient; no extra packages, AOT-safe JSON
   FileVault.WebDav/        ← WebDAV over HttpClient + System.Xml; no extra packages, AOT-safe
+  FileVault.Dropbox/       ← Dropbox HTTP API v2 over HttpClient; no SDK, AOT-safe JSON; OAuth 2 PKCE helper
   FileVault.Wsl/           ← Windows-only; depends on FileVault.Local (not Core directly)
   FileVault.Cli/           ← example only; not a NuGet package
 tests/
@@ -27,6 +28,7 @@ tests/
   FileVault.YandexDisk.Tests/  ← unit tests on a fake IDiskApi
   FileVault.GitHub.Tests/      ← contract + unit tests on an in-memory GitHub (FakeGitHub); live read test opt-in
   FileVault.WebDav.Tests/      ← unit tests (PROPFIND parsing, paths, canned handler) + contract/integration against `rclone serve webdav`
+  FileVault.Dropbox.Tests/     ← contract + unit tests on an in-memory Dropbox (FakeDropbox); live read test opt-in
 ```
 
 ---
@@ -201,6 +203,7 @@ FileVault providers expose `FullName` values, but user-entered path parsing and 
 | SFTP | `sftp://host/path` | Port optional |
 | Yandex Disk | `disk:/` (root) · `disk:/path` (subfolder) | |
 | Google Drive | `gdrive:root` (root) · `gdrive:<fileId>` (subfolder) | |
+| Dropbox | `dropbox:/` (root) · `dropbox:/<path>` | `path_display` casing; compare case-insensitively (`DropboxPath.AreSame`); no account in it |
 | GitHub | `github:<owner>/<repo>@<branch>:/<path>` | Branch may hold `/`, never `:`; `GitHubPath.TryParse` refuses `..` and `.git` |
 | WebDAV | `webdavs://host[:port]/path` (https) · `webdav://host[:port]/path` (http) | `path` decoded, from the host root (includes the base URI's path), no trailing slash; not a URL — `#`, `%`, spaces as is |
 | WSL | `\\wsl$\<distro>\` | Windows only; use `FileVault.Local` against the UNC path |
@@ -232,6 +235,38 @@ Clients decide whether to use these strings, their own saved-location model, or 
 - Native COPY / MOVE always start with `Overwrite: F`. Folders: 412 → `Success(null)`, the caller merges item by item (`Overwrite: T` would delete the existing folder). Files: 412 → replace through a temp copy / `Overwrite: T`, never over a folder.
 - PUT always carries a Content-Length (many servers refuse chunked PUT); a source of unknown length is buffered with `TemporaryFileBuffer` first. Uploads follow [Partial files](#partial-files): PUT to the temp name, then MOVE.
 - No trash: `toRecycleBin: true` → `Failure(NotSupportedException)` before any request. `IDriveItem` quota from `quota-used-bytes` / `quota-available-bytes` (RFC 4331); negative or missing → 0.
+## Dropbox provider — decisions
+
+- One `DropboxClient` = one account. Items and providers of the same instance are "same provider"
+  (`ReferenceEquals(item.Client, client)`): copy / move / rename / folder copy run on Dropbox (`copy_v2`, `move_v2`).
+  Over 10 000 entries Dropbox answers `too_many_files`; the same entry then goes as a one-entry
+  `copy_batch_v2` / `move_batch_v2` job polled through `…/check_v2`.
+- Raw `HttpClient`, JSON through `DropboxJsonContext` (source-generated, snake_case; unions as flat records with
+  `.tag`). Content endpoints take their argument in `Dropbox-API-Arg`, every non-ASCII character escaped as
+  `\uXXXX` (`DropboxApi.EscapeNonAscii`).
+- Tokens come from the app through `IDropboxTokenSource` (or a `Func<CancellationToken, ValueTask<string>>`); after
+  401 `expired_access_token` the source is asked once more with the rejected token, and the call is repeated once.
+  `DropboxRefreshingTokenSource` refreshes via `DropboxAuth` (PKCE, app key only, `token_access_type=offline`;
+  paste-the-code flow without a redirect URI, or a loopback redirect registered exactly in the App Console).
+- 429 / 503 with `Retry-After` is waited out up to `MaxRateLimitRetries` times when it is at most `MaxRetryAfter`;
+  otherwise `DropboxApiException.RetryAfter` tells the caller.
+- Upload: a seekable source up to `SimpleUploadLimit` (150 MB) is one `files/upload` (rewound for a retry); anything
+  else an upload session in `UploadChunkSize` (8 MB) buffered chunks. `autorename: false` always. Copy-in uses
+  `mode: overwrite` — the Replace path of `ResolveDestinationFileAsync(overwrite: true)`; `CreateEmptyTextFileAsync`
+  uses `add`. Server-side copy / move onto an existing file deletes it with `delete_v2` (restorable) and repeats.
+  Dropbox commits uploads atomically: no partial files.
+- Delete: `toRecycleBin: true` = `delete_v2` (deleted files, restorable for the retention period);
+  `toRecycleBin: false` = `permanently_delete`, Business apps only — refused elsewhere, and the result is a Failure,
+  never a fallback. The provider checks that every item is its own before deleting any.
+- Dropbox does not rename by case alone: a case-only rename moves through `<name>.filevault-rename-<guid>`.
+- Folder copy / move onto an existing folder (`to/conflict`) returns `Success(null)`, so the caller merges item by item.
+- Listing streams folders per page and yields files after the last page (folders first). Folders have no dates
+  (`ChangedDate = default`); files show `client_modified`.
+- `ISearchableFileProvider`: `search_v2` with `filename_only`, `options.path` = the provider's folder (omitted at the
+  root), paged through `search/continue_v2`. Dropbox's index matches words and prefixes, not every substring.
+- `IPublicLinkItem` (files and folders): `create_shared_link_with_settings` with `audience: public`,
+  `access: viewer`; on `shared_link_already_exists` the error's metadata or `list_shared_links` (`direct_only`);
+  removing revokes every direct link.
 
 ## IFileRevisionsItem
 
@@ -249,6 +284,9 @@ Optional: a file whose provider keeps a small picture of it. `HasThumbnail` is k
 - Yandex Disk: the listing's `preview` link (size S, 150 px); its `size` query parameter is set to the nearest larger of
   S/M/L/XL/XXL/XXXL, and if that is refused the link is used as listed. Downloaded through `IFilesClient`, which adds
   the OAuth header.
+- Dropbox: `get_thumbnail_v2` (JPEG, `bestfit`, the nearest larger of w32h32 … w2048h1536). `HasThumbnail` is by
+  extension (images, HEIC, common videos); a file Dropbox refuses to draw (`unsupported_extension`,
+  `unsupported_image`, `conversion_error`) gives null.
 - Local, FTP, SFTP, GitHub, WebDAV do not implement it: a client reads the file itself if it wants a picture.
 
 ## ISearchableFileProvider
@@ -273,6 +311,8 @@ Drive file and folder items (not by placeholders). `RemovePublicLinkAsync` retur
 - Google Drive: `permissions.list`; no `anyone` permission → create `{type: anyone, role: reader,
   allowFileDiscovery: false}`; then `files.get(webViewLink)`. An existing `anyone` permission is left as it is (even a
   writer one). Remove deletes every `anyone` permission (`domain` ones stay).
+- Dropbox: see "Dropbox provider — decisions" (search through `search_v2`, links through
+  `create_shared_link_with_settings`).
 
 ## IOpenableItem
 
@@ -326,7 +366,7 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`) + non-integration `FileVault.WebDav.Tests` (parsing, canned handler).
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`) + non-integration `FileVault.WebDav.Tests` (parsing, canned handler) + non-integration `FileVault.Dropbox.Tests` (`FakeDropbox`).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via NuGet Trusted Publishing (no API key: a nuget.org policy for this repo and `publish.yml`, plus the `NUGET_USER` secret — the nuget.org profile name of the policy's creator).
 - FTP, Google Drive and WebDAV integration tests are **not** run in CI (require Docker / service account / rclone).
 
