@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>OneDrive provider for FileVault (personal and work/school accounts). Implements IFileProvider over Microsoft Graph with a plain HttpClient: upload sessions for large files, server-side copy and move, recycle bin, thumbnails, search and public links. Ships an OAuth 2.0 authorization code + PKCE helper for desktop apps. NativeAOT-compatible, no Graph SDK or MSAL.</Description>
+    <PackageTags>file-manager;file-provider;onedrive;microsoft-graph;cloud;storage</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileVault.Core\FileVault.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileVault.OneDrive.Tests" />
+  </ItemGroup>
+
+</Project>

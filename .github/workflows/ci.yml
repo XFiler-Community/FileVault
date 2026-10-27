@@ -33,6 +33,7 @@ jobs:
           dotnet test tests/FileVault.GoogleDrive.Tests --no-build --configuration Release --filter "Category!=Integration" --logger "trx;LogFileName=gdrive-results.trx"
           dotnet test tests/FileVault.YandexDisk.Tests --no-build --configuration Release --logger "trx;LogFileName=yandex-results.trx"
           dotnet test tests/FileVault.GitHub.Tests --no-build --configuration Release --filter "Category!=Integration" --logger "trx;LogFileName=github-results.trx"
+          dotnet test tests/FileVault.OneDrive.Tests --no-build --configuration Release --filter "Category!=Integration" --logger "trx;LogFileName=onedrive-results.trx"
 
       - name: Upload test results
         if: always()

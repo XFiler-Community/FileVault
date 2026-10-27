@@ -15,6 +15,7 @@ src/
   FileVault.YandexDisk/    ← XFiler.YandexDisk.Client
   FileVault.GoogleDrive/   ← Google.Apis.Drive.v3
   FileVault.GitHub/        ← GitHub REST + Git LFS batch API over HttpClient; no extra packages, AOT-safe JSON
+  FileVault.OneDrive/      ← Microsoft Graph over HttpClient (no Graph SDK / MSAL), AOT-safe JSON; OAuth PKCE helper
   FileVault.Wsl/           ← Windows-only; depends on FileVault.Local (not Core directly)
   FileVault.Cli/           ← example only; not a NuGet package
 tests/
@@ -25,6 +26,7 @@ tests/
   FileVault.GoogleDrive.Tests/
   FileVault.YandexDisk.Tests/  ← unit tests on a fake IDiskApi
   FileVault.GitHub.Tests/      ← contract + unit tests on an in-memory GitHub (FakeGitHub); live read test opt-in
+  FileVault.OneDrive.Tests/    ← contract + unit tests on an in-memory Graph (FakeGraph); live read test opt-in
 ```
 
 ---
@@ -200,6 +202,7 @@ FileVault providers expose `FullName` values, but user-entered path parsing and 
 | Yandex Disk | `disk:/` (root) · `disk:/path` (subfolder) | |
 | Google Drive | `gdrive:root` (root) · `gdrive:<fileId>` (subfolder) | |
 | GitHub | `github:<owner>/<repo>@<branch>:/<path>` | Branch may hold `/`, never `:`; `GitHubPath.TryParse` refuses `..` and `.git` |
+| OneDrive | `onedrive:root` (root) · `onedrive:<item-id>` (any item) · `onedrive:<parent-id>/<name>` (destination) | Ids survive rename/move; one `OneDriveClient` = one account's `/me/drive` |
 | WSL | `\\wsl$\<distro>\` | Windows only; use `FileVault.Local` against the UNC path |
 
 Clients decide whether to use these strings, their own saved-location model, or another route format.
@@ -220,6 +223,30 @@ Clients decide whether to use these strings, their own saved-location model, or 
 - `ListRecursiveAsync(folder)` reads a whole subtree with one `git/trees/{sha}?recursive=1` and caches every tree in the answer, so listings below it cost no request; a recursive walk that is already fully cached costs none either. When GitHub answers `truncated: true` it reads that level alone and each subfolder the same way. `resolveLfsSizes: false` skips the pointer reads (sizes stay pointer sizes) for whole-repository scans.
 - `ChangedDate` = date of the listed head commit; per-file dates come from `GetCommitsAsync(path)`.
 
+## OneDrive provider — decisions
+
+- Raw `HttpClient` against `https://graph.microsoft.com/v1.0/me/drive`; JSON through `OneDriveJsonContext` (source
+  generation). The app supplies tokens through `OneDriveAccessTokenProvider(forceRefresh, ct)`; a 401 asks it once more
+  with `forceRefresh: true`. `OneDriveAuth` (auth code + PKCE, public client, authority `common`) and
+  `OneDriveTokenSource` (refresh before expiry, `TokensRefreshed` with the rotated refresh token) are optional helpers.
+- 429/503 (and 5xx for upload fragments / copy monitors) are retried after `Retry-After`, `MaxRetries` times, each
+  wait capped by `MaxRetryDelay`.
+- "Same provider" = `ReferenceEquals(item.Client, client)`. Copy is `POST /copy` + polling the monitor URL (no token);
+  move/rename is one `PATCH`. A taken name cannot be copied or moved onto on the server (personal drives ignore
+  `conflictBehavior` on copy), so a file falls back to download + upload with `replace` (+ recycle the source on move)
+  and a folder returns `Success(null)`.
+- Uploads: `PUT …:/name:/content` up to 4 MB, else an upload session in 320 KiB-multiple fragments (10 MiB), sent
+  without the token. Cross-provider uploads use `conflictBehavior=replace` (the name was resolved before; overwrite
+  kept it on purpose), `CreateFolderAsync` / `CreateEmptyTextFileAsync` use `fail`. A cancelled session is `DELETE`d.
+  OneDrive commits only complete uploads, so no partial files.
+- `DeleteAsync(toRecycleBin: true)` = `DELETE` (OneDrive recycle bin); `false` = `permanentDelete`, and a drive that
+  refuses it gives `NotSupportedException` — never a silent move to the recycle bin.
+- `remoteItem` entries (folders shared from other drives) are skipped: they are not addressable under `/me/drive`.
+- Search: `items/{id}/search(q=…)`, results filtered to the folder's subtree (by `parentReference.path`, else by walking
+  parent ids) since Graph does not document that a folder search stays inside the folder.
+- Public link: the item's own (non-inherited) anonymous `view` link, else `createLink` view/anonymous; removing deletes
+  those permissions only.
+
 ## IFileRevisionsItem
 
 Optional, like `IOpenableItem`: a file whose provider keeps past states. Only `GoogleDriveFileItem` implements it
@@ -236,6 +263,9 @@ Optional: a file whose provider keeps a small picture of it. `HasThumbnail` is k
 - Yandex Disk: the listing's `preview` link (size S, 150 px); its `size` query parameter is set to the nearest larger of
   S/M/L/XL/XXL/XXXL, and if that is refused the link is used as listed. Downloaded through `IFilesClient`, which adds
   the OAuth header.
+- OneDrive: `HasThumbnail` is guessed from the listing (image/photo/video facets, Office/PDF/picture extensions) — work/school
+  drives cannot `$expand=thumbnails` on children. `thumbnails/0/c{size}x{size}/content` (redirect to storage, no
+  token), falling back to small/medium/large on 400; 404 → null.
 - Local, FTP, SFTP, GitHub do not implement it: a client reads the file itself if it wants a picture.
 
 ## IOpenableItem
@@ -290,7 +320,7 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`).
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`) + non-integration `FileVault.OneDrive.Tests` (`FakeGraph`).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via NuGet Trusted Publishing (no API key: a nuget.org policy for this repo and `publish.yml`, plus the `NUGET_USER` secret — the nuget.org profile name of the policy's creator).
 - FTP and Google Drive integration tests are **not** run in CI (require Docker / service account).
 
