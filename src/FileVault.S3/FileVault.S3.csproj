@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>S3-compatible object storage provider for FileVault (AWS S3, Cloudflare R2, Backblaze B2, MinIO, Yandex Object Storage and others). Implements IFileProvider and ISearchableFileProvider over one bucket with plain HttpClient and its own AWS Signature V4: folders as common prefixes, multipart uploads for large files, server-side copies. No AWS SDK, NativeAOT-safe.</Description>
+    <PackageTags>file-manager;file-provider;s3;aws;r2;b2;minio;object-storage;cloud;storage</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FileVault.Core\FileVault.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileVault.S3.Tests" />
+  </ItemGroup>
+
+</Project>

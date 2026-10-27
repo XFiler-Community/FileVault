@@ -8,7 +8,7 @@ A platform-independent .NET library for working with file systems. The single `I
 
 FileVault does not parse user-entered paths or choose a backend for an application. The client resolves its own routes, bookmarks, accounts, and credentials, then creates the appropriate `IFileProvider` directly.
 
-> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · GitHub repositories (with Git LFS) · WSL via UNC paths (Windows)
+> **Supported backends:** Local FS · FTP/FTPS · SFTP · Yandex Disk · Google Drive · GitHub repositories (with Git LFS) · S3-compatible storage (AWS S3, Cloudflare R2, Backblaze B2, MinIO, Yandex Object Storage…) · WSL via UNC paths (Windows)
 
 ## Packages
 
@@ -21,6 +21,7 @@ FileVault does not parse user-entered paths or choose a backend for an applicati
 | `FileVault.YandexDisk` | [![NuGet](https://img.shields.io/nuget/v/FileVault.YandexDisk.svg)](https://www.nuget.org/packages/FileVault.YandexDisk) | Yandex Disk via REST API |
 | `FileVault.GoogleDrive` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GoogleDrive.svg)](https://www.nuget.org/packages/FileVault.GoogleDrive) | Google Drive via Drive API v3 |
 | `FileVault.GitHub` | [![NuGet](https://img.shields.io/nuget/v/FileVault.GitHub.svg)](https://www.nuget.org/packages/FileVault.GitHub) | One branch of a GitHub repository via REST API: commits as writes, Git LFS reads, history |
+| `FileVault.S3` | [![NuGet](https://img.shields.io/nuget/v/FileVault.S3.svg)](https://www.nuget.org/packages/FileVault.S3) | One bucket of any S3-compatible storage via REST and its own SigV4 (no AWS SDK, AOT-safe): multipart uploads, server-side copies, search |
 | `FileVault.Wsl` | [![NuGet](https://img.shields.io/nuget/v/FileVault.Wsl.svg)](https://www.nuget.org/packages/FileVault.Wsl) | WSL distros via `\\wsl$\` UNC paths (Windows 10 1903+) |
 
 ## Installation
@@ -33,6 +34,7 @@ dotnet add package FileVault.Sftp
 dotnet add package FileVault.YandexDisk
 dotnet add package FileVault.GoogleDrive
 dotnet add package FileVault.GitHub
+dotnet add package FileVault.S3
 dotnet add package FileVault.Wsl        # Windows only
 ```
 
@@ -199,6 +201,39 @@ var ahead = await repository.CompareAsync("main", "claude/open-calls");  // a cl
 > commit the folder was listed at — per-file dates come from `GetCommitsAsync(path)`. `ListRecursiveAsync` falls back to
 > reading folder by folder when GitHub truncates a recursive tree (over 100 000 entries or 7 MB).
 
+### S3-compatible storage
+
+```csharp
+using FileVault.S3;
+
+// One bucket; Endpoint is the service without the bucket
+var connection = new S3Connection
+{
+    Endpoint = new Uri("https://<account>.r2.cloudflarestorage.com"),  // or https://s3.eu-central-1.amazonaws.com,
+    Region = "auto",                                                  // https://storage.yandexcloud.net (ru-central1),
+    Bucket = "photos",                                                // http://localhost:9000 (MinIO) …
+    AccessKeyId = accessKeyId,
+    SecretAccessKey = secretAccessKey,
+    ForcePathStyle = false,          // true: https://endpoint/bucket/key (MinIO, buckets with dots)
+    HttpClient = httpClient          // optional; give it an infinite timeout for large files
+};
+
+var bucket = new S3DriveItem(connection);                 // the bucket as a drive: s3://<host>/photos/
+var root = new S3FileProvider(connection);                // same as bucket.CreateProvider()
+var folder = new S3FileProvider(connection, "2024/trips");
+
+// Files and folders whose name contains the text, at any depth below the folder
+await foreach (var item in folder.SearchAsync("rome")) { /* S3FileItem or S3FolderItem */ }
+```
+
+> Folders are common prefixes; `CreateFolderAsync` writes a zero-byte `name/` marker. Uploads of a known length up to
+> `MultipartThreshold` (64 MB) are one PUT, larger or of unknown length go as a multipart upload in `PartSize` (16 MB)
+> parts, aborted on failure or cancel, so the old object stays. Copies, moves and renames within one account
+> (endpoint + region + access key) are server-side `CopyObject` + delete — for a folder, of every key under it;
+> objects over 5 GB are copied in ranges, or streamed when the server has no `UploadPartCopy`. S3 has no trash:
+> `toRecycleBin: true` fails with `NotSupportedException`. S3 keeps no folder dates, so listed folders carry the Unix
+> epoch; the bucket's size and free space are 0.
+
 ### WSL (Windows Subsystem for Linux)
 
 > Requires Windows 10 1903+ with WSL installed. No-op on macOS/Linux.
@@ -220,12 +255,14 @@ using FileVault.Core;
 using FileVault.Ftp;
 using FileVault.Local;
 using FileVault.GoogleDrive;
+using FileVault.S3;
 
 IFileProvider provider = location.Kind switch
 {
     LocationKind.Local => new LocalFileProvider(location.Path),
     LocationKind.Ftp => new FtpFileProvider(ftpClient, location.RemotePath),
     LocationKind.GoogleDrive => new GoogleDriveFileProvider(driveService, location.FolderId),
+    LocationKind.S3 => new S3FileProvider(s3Connections[location.AccountId], location.Prefix),
     _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
 };
 ```
@@ -251,7 +288,7 @@ var copyResult = await destProvider.CopyFileInAsync(
 await destProvider.MoveFileInAsync(sourceFileItem, destPath, progress);
 
 // Delete: toRecycleBin: true moves to the backend's trash (Local with ILocalRecycleBin, Yandex Disk,
-// Google Drive; GitHub deletes with a commit the history can undo); other providers return
+// Google Drive; GitHub deletes with a commit the history can undo); other providers (FTP, SFTP, S3) return
 // Failure(NotSupportedException) and delete nothing.
 var deleted = await provider.DeleteAsync([item], toRecycleBin: true);
 if (deleted.Exception is NotSupportedException)
@@ -298,6 +335,7 @@ Register authenticated clients, services, or app-specific factories. FileVault i
 ```csharp
 services.AddSingleton(driveService);
 services.AddSingleton(ftpClient);
+services.AddSingleton(s3Connection);
 
 services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => location.Kind switch
 {
@@ -306,6 +344,7 @@ services.AddTransient<Func<SavedLocation, IFileProvider>>(sp => location => loca
     LocationKind.GoogleDrive => new GoogleDriveFileProvider(
         sp.GetRequiredService<DriveService>(),
         location.FolderId),
+    LocationKind.S3 => new S3FileProvider(sp.GetRequiredService<S3Connection>(), location.Prefix),
     _ => throw new NotSupportedException($"Unsupported location kind: {location.Kind}")
 });
 ```
@@ -338,6 +377,7 @@ public class MyProviderContractTests : FileProviderContractTests
 
 - .NET 10 SDK
 - Docker (for FTP integration tests via TestContainers)
+- rclone (for S3 integration tests: `rclone serve s3`)
 
 ### Build & Test
 
@@ -352,6 +392,11 @@ dotnet test tests/FileVault.Ftp.Tests --filter "Category=Integration"
 # GitHub provider: unit and contract tests run against an in-memory GitHub; the live test reads a public repo
 dotnet test tests/FileVault.GitHub.Tests --filter "Category!=Integration"
 GITHUB_LIVE_TESTS=1 dotnet test tests/FileVault.GitHub.Tests --filter "Category=Integration"
+
+# S3 provider: SigV4 test vectors and contract tests against an in-memory S3; integration tests start
+# `rclone serve s3` on a temp folder (rclone on PATH, in Homebrew's folders, or RCLONE_PATH)
+dotnet test tests/FileVault.S3.Tests --filter "Category!=Integration"
+dotnet test tests/FileVault.S3.Tests --filter "Category=Integration"
 
 # Google Drive integration tests (requires a service account JSON)
 export GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON=/path/to/sa.json

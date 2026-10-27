@@ -8,6 +8,7 @@
     <Project Path="src/FileVault.YandexDisk/FileVault.YandexDisk.csproj" />
     <Project Path="src/FileVault.GoogleDrive/FileVault.GoogleDrive.csproj" />
     <Project Path="src/FileVault.GitHub/FileVault.GitHub.csproj" />
+    <Project Path="src/FileVault.S3/FileVault.S3.csproj" />
     <Project Path="src/FileVault.Wsl/FileVault.Wsl.csproj" />
   </Folder>
   <Folder Name="/tests/">
@@ -17,6 +18,7 @@
     <Project Path="tests/FileVault.Local.Tests/FileVault.Local.Tests.csproj" />
     <Project Path="tests/FileVault.GoogleDrive.Tests/FileVault.GoogleDrive.Tests.csproj" />
     <Project Path="tests/FileVault.GitHub.Tests/FileVault.GitHub.Tests.csproj" />
+    <Project Path="tests/FileVault.S3.Tests/FileVault.S3.Tests.csproj" />
     <Project Path="tests/FileVault.YandexDisk.Tests/FileVault.YandexDisk.Tests.csproj" />
   </Folder>
 </Solution>

@@ -15,6 +15,7 @@ src/
   FileVault.YandexDisk/    ← XFiler.YandexDisk.Client
   FileVault.GoogleDrive/   ← Google.Apis.Drive.v3
   FileVault.GitHub/        ← GitHub REST + Git LFS batch API over HttpClient; no extra packages, AOT-safe JSON
+  FileVault.S3/            ← S3-compatible REST over HttpClient with its own SigV4; no AWS SDK, AOT-safe (LINQ to XML)
   FileVault.Wsl/           ← Windows-only; depends on FileVault.Local (not Core directly)
   FileVault.Cli/           ← example only; not a NuGet package
 tests/
@@ -25,6 +26,7 @@ tests/
   FileVault.GoogleDrive.Tests/
   FileVault.YandexDisk.Tests/  ← unit tests on a fake IDiskApi
   FileVault.GitHub.Tests/      ← contract + unit tests on an in-memory GitHub (FakeGitHub); live read test opt-in
+  FileVault.S3.Tests/          ← SigV4 vectors, contract + unit tests on an in-memory S3 (FakeS3); Integration: rclone serve s3
 ```
 
 ---
@@ -200,6 +202,7 @@ FileVault providers expose `FullName` values, but user-entered path parsing and 
 | Yandex Disk | `disk:/` (root) · `disk:/path` (subfolder) | |
 | Google Drive | `gdrive:root` (root) · `gdrive:<fileId>` (subfolder) | |
 | GitHub | `github:<owner>/<repo>@<branch>:/<path>` | Branch may hold `/`, never `:`; `GitHubPath.TryParse` refuses `..` and `.git` |
+| S3 | `s3://<endpoint host[:port]>/<bucket>/` (root) · `s3://<host>/<bucket>/<key>` | Folder without its trailing slash; keys raw, not escaped |
 | WSL | `\\wsl$\<distro>\` | Windows only; use `FileVault.Local` against the UNC path |
 
 Clients decide whether to use these strings, their own saved-location model, or another route format.
@@ -220,6 +223,30 @@ Clients decide whether to use these strings, their own saved-location model, or 
 - `ListRecursiveAsync(folder)` reads a whole subtree with one `git/trees/{sha}?recursive=1` and caches every tree in the answer, so listings below it cost no request; a recursive walk that is already fully cached costs none either. When GitHub answers `truncated: true` it reads that level alone and each subfolder the same way. `resolveLfsSizes: false` skips the pointer reads (sizes stay pointer sizes) for whole-repository scans.
 - `ChangedDate` = date of the listed head commit; per-file dates come from `GetCommitsAsync(path)`.
 
+## S3 provider — decisions
+
+- `S3Connection` = one bucket + credentials (init-only). "Same provider" = `IsSameAccount` (endpoint scheme/host/port,
+  region, access key id), so copies and moves between buckets of one account stay server-side; renames and deletes
+  need the same bucket (`IsSameBucket`).
+- No AWS SDK: `S3Signer` is SigV4 (checked against AWS's published vectors); the canonical URI is encoded once (S3
+  rule) and the request goes out with `DangerousDisablePathAndQueryCanonicalization`, so the wire path is the signed
+  one. Streamed single PUTs are signed `UNSIGNED-PAYLOAD`; buffered bodies (parts, small PUTs) carry their SHA-256.
+- Folders are common prefixes (`delimiter=/`); `CreateFolderAsync` writes a zero-byte `name/` marker; a listing
+  never shows the folder's own marker. `ContainsFolderAsync` looks at the parent's listing, so servers over a file
+  system (rclone, which shows empty directories only that way) answer too.
+- Uploads: known length ≤ `MultipartThreshold` → one streamed PUT; otherwise parts of `PartSize` read into one reused
+  buffer (a source ending within the first part → one PUT). Any failure or cancel aborts the multipart upload with
+  its own 30 s timeout. S3 commits whole objects, so no partial-file dance is needed.
+- Server copy: `CopyObject` up to `MultipartCopyThreshold` (≤ 5 GB), above it `UploadPartCopy` ranges; a 501 /
+  `NotImplemented`, or a 200 without `CopyPartResult` (rclone takes it for an empty UploadPart), falls back to
+  streaming through the client. Folder copy/move = every key under the prefix, then (move) `DeleteObjects` in
+  batches of 1000 — only after every copy landed.
+- `toRecycleBin: true` → `Failure(NotSupportedException)` before any request. `SearchAsync` lists all keys under
+  the prefix without a delimiter and yields matching files and implied folders (once each). No `IPublicLinkItem`:
+  presigned URLs expire.
+- `rclone serve s3` stores keys as files, so it cannot keep folder markers: the rclone contract fixture skips
+  `CreateFolderAsync_ReturnsItemAndCreatesDirectory`; `FakeS3` covers markers and `UploadPartCopy`.
+
 ## IFileRevisionsItem
 
 Optional, like `IOpenableItem`: a file whose provider keeps past states. Only `GoogleDriveFileItem` implements it
@@ -236,7 +263,7 @@ Optional: a file whose provider keeps a small picture of it. `HasThumbnail` is k
 - Yandex Disk: the listing's `preview` link (size S, 150 px); its `size` query parameter is set to the nearest larger of
   S/M/L/XL/XXL/XXXL, and if that is refused the link is used as listed. Downloaded through `IFilesClient`, which adds
   the OAuth header.
-- Local, FTP, SFTP, GitHub do not implement it: a client reads the file itself if it wants a picture.
+- Local, FTP, SFTP, GitHub, S3 do not implement it: a client reads the file itself if it wants a picture.
 
 ## IOpenableItem
 
@@ -290,9 +317,9 @@ Do all five in the same session as the code change.
 
 ## CI/CD
 
-- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`).
+- `ci.yml` — runs on push/PR to `main`: build (Release) + `FileVault.Core.Tests` + `FileVault.Local.Tests` + non-integration `FileVault.GoogleDrive.Tests` (fake HTTP handler) + `FileVault.YandexDisk.Tests` (fake `IDiskApi`) + non-integration `FileVault.GitHub.Tests` (`FakeGitHub`) + non-integration `FileVault.S3.Tests` (`FakeS3`).
 - `publish.yml` — runs on `v*` git tags: pack all `IsPackable=true` projects + push to NuGet.org via NuGet Trusted Publishing (no API key: a nuget.org policy for this repo and `publish.yml`, plus the `NUGET_USER` secret — the nuget.org profile name of the policy's creator).
-- FTP and Google Drive integration tests are **not** run in CI (require Docker / service account).
+- FTP, Google Drive and S3 integration tests are **not** run in CI (require Docker / service account / rclone).
 
 ---
 
