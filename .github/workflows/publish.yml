@@ -41,6 +41,8 @@ jobs:
           dotnet test tests/FileVault.GitHub.Tests --no-build --configuration Release --filter "Category!=Integration"
           dotnet test tests/FileVault.WebDav.Tests --no-build --configuration Release --filter "Category!=Integration"
           dotnet test tests/FileVault.OneDrive.Tests --no-build --configuration Release --filter "Category!=Integration"
+          dotnet test tests/FileVault.Dropbox.Tests --no-build --configuration Release --filter "Category!=Integration"
+          dotnet test tests/FileVault.S3.Tests --no-build --configuration Release --filter "Category!=Integration"
 
       - name: Pack
         run: dotnet pack --no-build --configuration Release --output ./nupkgs -p:MinVerSkip=true -p:Version=$VERSION
