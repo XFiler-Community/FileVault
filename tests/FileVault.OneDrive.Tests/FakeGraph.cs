@@ -393,13 +393,18 @@ internal sealed class FakeGraph : HttpMessageHandler
         return Json(json);
     }
 
+    // Graph reports a folder's size as the sum of every file below it
+    private long TreeSize(string folderId) =>
+        _items.Values.Where(n => n.ParentId == folderId && !n.Recycled)
+            .Sum(n => n.IsFolder ? TreeSize(n.Id) : (long)n.Content.Length);
+
     private JsonObject ItemJson(Node node, bool withPath = true)
     {
         var json = new JsonObject
         {
             ["id"] = node.Id,
             ["name"] = node.Name,
-            ["size"] = node.IsFolder ? 0 : node.Content.Length,
+            ["size"] = node.IsFolder ? TreeSize(node.Id) : node.Content.Length,
             ["lastModifiedDateTime"] = node.Modified.ToString("O")
         };
 

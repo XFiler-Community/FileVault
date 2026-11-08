@@ -363,6 +363,142 @@ public class YandexDiskFileProviderTests
         Assert.That(api.Unpublishes, Is.Empty);
     }
 
+    // ── Folder sizes ────────────────────────────────────────────────────────
+
+    private static FakeDiskApi SizesApi(int? maxFilesPerPage = null) => new()
+    {
+        MaxFilesPerPage = maxFilesPerPage,
+        AllFiles =
+        [
+            FileResource("disk:/a/x.bin", 3),
+            FileResource("disk:/a/b/y.bin", 5),
+            FileResource("disk:/top.txt", 100),
+            FileResource("disk:/ab/z.bin", 7)
+        ]
+    };
+
+    private static async Task<List<FolderSizes>> MeasureAsync(IFolderSizeProvider provider) =>
+        await provider.MeasureFoldersAsync().ToListAsync();
+
+    [Test]
+    public async Task MeasureFoldersAsync_Root_AddsUpTheFlatFileList()
+    {
+        var api = SizesApi();
+
+        var sizes = await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+
+        Assert.That(sizes[^1].IsComplete, Is.True);
+        // an empty folder (c/) has no file in the flat list, so it is missing — which the contract reads as 0
+        Assert.That(sizes[^1].Bytes, Is.EquivalentTo(new Dictionary<string, long> { ["a"] = 8, ["ab"] = 7 }),
+            "top.txt lies directly in the folder and is no subfolder's");
+        Assert.That(api.FileListOffsets, Is.EqualTo(new[] { 0 }));
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_Subfolder_MeasuresItsOwnSubfolders()
+    {
+        var api = SizesApi();
+
+        var sizes = await MeasureAsync(new YandexDiskFileProvider(api, "disk:/a"));
+
+        Assert.That(sizes[^1].Bytes, Is.EquivalentTo(new Dictionary<string, long> { ["b"] = 5 }));
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_PathWithoutScheme_StillMatches()
+    {
+        var sizes = await MeasureAsync(new YandexDiskFileProvider(SizesApi(), "/a/"));
+
+        Assert.That(sizes[^1].Bytes, Is.EquivalentTo(new Dictionary<string, long> { ["b"] = 5 }));
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_ServerCapsThePage_KeepsPaging()
+    {
+        var api = SizesApi(maxFilesPerPage: 3);
+
+        var sizes = await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+
+        Assert.That(api.FileListOffsets, Is.EqualTo(new[] { 0, 3 }));
+        Assert.That(sizes, Has.Count.EqualTo(2));
+        Assert.That(sizes[0].IsComplete, Is.False);
+        Assert.That(sizes[^1].Bytes, Is.EquivalentTo(new Dictionary<string, long> { ["a"] = 8, ["ab"] = 7 }));
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_ExactlyFullLastPage_AsksOnceMore()
+    {
+        var api = SizesApi(maxFilesPerPage: 2);
+
+        var sizes = await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+
+        Assert.That(api.FileListOffsets, Is.EqualTo(new[] { 0, 2, 4 }));
+        Assert.That(sizes[^1].Bytes, Is.EquivalentTo(new Dictionary<string, long> { ["a"] = 8, ["ab"] = 7 }));
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_SecondMeasureWithinCacheDuration_AsksNothing()
+    {
+        var api = SizesApi();
+        await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+        api.FileListOffsets.Clear();
+
+        var root = await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+        var a = await MeasureAsync(new YandexDiskFileProvider(api, "disk:/a"));
+
+        Assert.That(api.FileListOffsets, Is.Empty);
+        Assert.That(root.Single().IsComplete, Is.True);
+        Assert.That(root.Single().Bytes, Is.EquivalentTo(new Dictionary<string, long> { ["a"] = 8, ["ab"] = 7 }));
+        Assert.That(a.Single().Bytes, Is.EquivalentTo(new Dictionary<string, long> { ["b"] = 5 }));
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_CacheIsPerApi()
+    {
+        await MeasureAsync(new YandexDiskFileProvider(SizesApi(), "disk:/"));
+        var other = SizesApi();
+
+        await MeasureAsync(new YandexDiskFileProvider(other, "disk:/"));
+
+        Assert.That(other.FileListOffsets, Is.EqualTo(new[] { 0 }));
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_CacheExpired_CountsAgain()
+    {
+        var duration = YandexDiskFileProvider.FolderSizesCacheDuration;
+        try
+        {
+            YandexDiskFileProvider.FolderSizesCacheDuration = TimeSpan.Zero;
+            var api = SizesApi();
+
+            await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+            await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+
+            Assert.That(api.FileListOffsets, Is.EqualTo(new[] { 0, 0 }));
+        }
+        finally
+        {
+            YandexDiskFileProvider.FolderSizesCacheDuration = duration;
+        }
+    }
+
+    [Test]
+    public async Task MeasureFoldersAsync_AfterAWrite_CountsAgain()
+    {
+        var api = SizesApi();
+        await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+
+        var created = await new YandexDiskFileProvider(api, "disk:/a").CreateFolderAsync("new");
+        Assert.That(created.IsSuccess, Is.True, created.ErrorMessage);
+        Assert.That(api.CreatedDirectories, Is.EqualTo(new[] { "disk:/a/new" }));
+        api.FileListOffsets.Clear();
+
+        await MeasureAsync(new YandexDiskFileProvider(api, "disk:/"));
+
+        Assert.That(api.FileListOffsets, Is.EqualTo(new[] { 0 }));
+    }
+
     private static FakeDiskApi PublishingApi()
     {
         var published = new Dictionary<string, string>();
@@ -388,11 +524,12 @@ public class YandexDiskFileProviderTests
         Type = ResourceType.Dir
     };
 
-    private static Resource FileResource(string path) => new()
+    private static Resource FileResource(string path, long size = 0) => new()
     {
         Name = path[(path.LastIndexOf('/') + 1)..],
         Path = path,
-        Type = ResourceType.File
+        Type = ResourceType.File,
+        Size = size
     };
 
     private static YandexApiException ApiError(HttpStatusCode status) => new(status, status.ToString(), error: null);
@@ -440,6 +577,14 @@ public class YandexDiskFileProviderTests
                 Limit = limit,
                 Offset = offset
             });
+        }
+
+        public List<string> CreatedDirectories { get; } = [];
+
+        public Task<Link> CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)
+        {
+            CreatedDirectories.Add(path);
+            return Task.FromResult(new Link { HttpStatusCode = HttpStatusCode.Created });
         }
 
         public Dictionary<string, string> Published { get; init; } = [];
@@ -519,7 +664,6 @@ public class YandexDiskFileProviderTests
         public Task<Resource> GetTrashInfoAsync(ResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<LastUploadedResourceList> GetLastUploadedInfoAsync(LastUploadedResourceRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Resource> AppendCustomPropertiesAsync(string path, IDictionary<string, string?> properties, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Link> CreateDirectoryAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Link?> EmptyTrashAsync(string? path = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Link> RestoreFromTrashAsync(RestoreFromTrashRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Stream> DownloadAsync(Link link, CancellationToken cancellationToken = default) => throw new NotSupportedException();

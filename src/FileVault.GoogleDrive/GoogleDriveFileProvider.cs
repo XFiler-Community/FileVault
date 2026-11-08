@@ -4,8 +4,11 @@ using DriveFile = Google.Apis.Drive.v3.Data.File;
 
 namespace FileVault.GoogleDrive;
 
-public sealed class GoogleDriveFileProvider(DriveService service, string folderId) : ISearchableFileProvider
+public sealed class GoogleDriveFileProvider(DriveService service, string folderId)
+    : ISearchableFileProvider, IFolderSizeProvider
 {
+    private const string SizeFields = "nextPageToken, files(id, name, mimeType, size, parents)";
+    private const int ParentsPerQuery = 40;
     private const string FolderMimeType = GoogleDriveMimeTypes.Folder;
     private const string Scheme = "gdrive:";
     private const string ListFields = "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, thumbnailLink)";
@@ -82,6 +85,83 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
                 else
                     yield return new GoogleDriveFileItem(file, service);
             }
+
+            pageToken = result.NextPageToken;
+        }
+        while (pageToken != null);
+    }
+
+    /// <summary>
+    /// Drive keeps no folder sizes, so the folders below are listed level by level, the children of up to 40 folders
+    /// per query (<c>'a' in parents or 'b' in parents …</c>, 1000 per page), a snapshot per page: as many requests as
+    /// there are thousands of items and dozens of folders below. Shortcuts are not followed; Google Docs files, which
+    /// have no size, add nothing. Two subfolders with one name (Drive allows it) share one total.
+    /// </summary>
+    public async IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var tally = new FolderSizeTally();
+        var topOf = new Dictionary<string, string>(StringComparer.Ordinal);
+        var level = new List<string>();
+
+        await foreach (var file in ListChildrenAsync([folderId], ct).ConfigureAwait(false))
+        {
+            if (file.MimeType != FolderMimeType || !topOf.TryAdd(file.Id, file.Name))
+                continue;
+
+            tally.AddFolder(file.Name);
+            level.Add(file.Id);
+        }
+
+        while (level.Count > 0)
+        {
+            var next = new List<string>();
+
+            foreach (var batch in level.Chunk(ParentsPerQuery))
+            {
+                await foreach (var file in ListChildrenAsync(batch, ct).ConfigureAwait(false))
+                {
+                    var top = file.Parents?.Select(parent => topOf.GetValueOrDefault(parent)).FirstOrDefault(t => t is not null);
+
+                    if (top is null)
+                        continue;
+
+                    if (file.MimeType == FolderMimeType)
+                    {
+                        if (topOf.TryAdd(file.Id, top))
+                            next.Add(file.Id);
+                    }
+                    else
+                        tally.Add(top, file.Size ?? 0);
+                }
+
+                yield return tally.Snapshot(isComplete: false);
+            }
+
+            level = next;
+        }
+
+        yield return tally.Snapshot(isComplete: true);
+    }
+
+    private async IAsyncEnumerable<DriveFile> ListChildrenAsync(IReadOnlyCollection<string> parents,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var inParents = string.Join(" or ", parents.Select(id => $"'{EscapeQuery(id)}' in parents"));
+        string? pageToken = null;
+
+        do
+        {
+            var request = service.Files.List();
+            request.Q = $"({inParents}) and trashed = false";
+            request.Fields = SizeFields;
+            request.PageSize = 1000;
+            request.PageToken = pageToken;
+
+            var result = await request.ExecuteAsync(ct).ConfigureAwait(false);
+
+            foreach (var file in result.Files ?? [])
+                yield return file;
 
             pageToken = result.NextPageToken;
         }

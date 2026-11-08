@@ -9,7 +9,8 @@ namespace FileVault.Dropbox;
 /// <c>delete_v2</c> (restorable for the account's retention period); <c>toRecycleBin: false</c> asks for
 /// <c>permanently_delete</c>, which only Dropbox Business apps may use — elsewhere the delete fails.
 /// </summary>
-public sealed class DropboxFileProvider(DropboxClient client, string path = "") : ISearchableFileProvider
+public sealed class DropboxFileProvider(DropboxClient client, string path = "")
+    : ISearchableFileProvider, IFolderSizeProvider
 {
     public DropboxClient Client => client;
     public string Path => path;
@@ -46,6 +47,38 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "") 
 
         await foreach (var entry in client.SearchAsync(path, query.Trim(), ct).ConfigureAwait(false))
             yield return ToItem(entry);
+    }
+
+    /// <summary>
+    /// One recursive listing of this folder (<c>list_folder</c> with <c>recursive: true</c>), a snapshot per page.
+    /// </summary>
+    public async IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var tally = new FolderSizeTally(StringComparer.OrdinalIgnoreCase);
+        var folder = DropboxPath.Normalize(path).ToLowerInvariant();
+        var counted = 0;
+
+        await foreach (var entry in client.ListAsync(path, recursive: true, ct).ConfigureAwait(false))
+        {
+            var isFolder = entry.Kind == DropboxEntryKind.Folder;
+
+            if (FolderSizeTally.SubfolderOf(folder, entry.PathLower, isFolder) is not { } subfolder)
+                continue;
+
+            if (isFolder)
+            {
+                if (DropboxPath.AreSame(DropboxPath.Parent(entry.PathLower), folder))
+                    tally.AddFolder(entry.Name);
+            }
+            else
+                tally.Add(subfolder, entry.Size);
+
+            if (++counted % DropboxClient.ListPageLimit == 0)
+                yield return tally.Snapshot(isComplete: false);
+        }
+
+        yield return tally.Snapshot(isComplete: true);
     }
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)

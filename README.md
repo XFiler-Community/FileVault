@@ -507,6 +507,33 @@ if (item is IPublicLinkItem shareable)
 | Yandex Disk | No search endpoint: pages through the flat list of every file on the disk (1000 per request) and keeps names below the folder. Folders are found through the files inside them — a folder with no file anywhere below it is not found | Publishes the resource and returns its `public_url`; remove = unpublish |
 | Google Drive | Drive's `name contains` (matches the start of words: "report" finds "Annual report.pdf", not "myreport.pdf"), not trashed, kept to items below the folder; for `root` — My Drive, without items only shared with you. Shared drives are not searched | Adds an `anyone` / `reader` permission and returns `webViewLink`; an existing `anyone` permission is kept as is; remove = delete every `anyone` permission |
 
+### Folder sizes (optional capability)
+
+`IFolderSizeProvider` adds up what lies below each subfolder of a folder, the cheapest way the backend allows, and
+streams snapshots while it counts:
+
+```csharp
+if (provider is IFolderSizeProvider sizes)
+{
+    await foreach (var snapshot in sizes.MeasureFoldersAsync(ct))
+    {
+        Console.WriteLine($"photos: {snapshot.Find("photos")} bytes so far");
+        if (snapshot.IsComplete) break;   // the last one: a folder missing from it holds no files
+    }
+}
+```
+
+| Provider | How |
+|---|---|
+| OneDrive | The size Graph keeps for every folder: one listing |
+| Dropbox | One recursive `list_folder` |
+| S3 | One listing of every key under the prefix |
+| GitHub | One recursive tree (LFS files at their real size) |
+| Yandex Disk | The flat list of every file on the disk; the count answers any folder of the account for 2 minutes, a write through the account drops it |
+| Google Drive | Level by level, the children of 40 folders per query |
+| FTP, SFTP, WebDAV | `FolderSizeWalker`: lists every folder below (1, 2 and 4 at a time) |
+| Local | Not implemented: walk the disk yourself |
+
 ## Microsoft.Extensions.DependencyInjection
 
 Register authenticated clients, services, or app-specific factories. FileVault itself does not provide a DI routing abstraction.

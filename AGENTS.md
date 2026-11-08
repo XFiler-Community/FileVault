@@ -356,6 +356,27 @@ Optional: a provider that finds items by name below its folder on the backend. A
   `root` is resolved to its real id first (parents never say "root"); items only shared with the user have no visible
   parent chain to it and drop out. Shared drives are not searched.
 
+## IFolderSizeProvider
+
+Optional: a provider that adds up the sizes of its folder's subfolders (every file at any depth) the cheapest way its
+backend allows. `MeasureFoldersAsync` yields `FolderSizes` snapshots (bytes by subfolder name, the backend's name
+comparison); the last one is `IsComplete`, and in it a missing subfolder holds no files. It throws on a backend failure
+(unlike `IFileProvider` methods, as `SearchAsync` does). `FolderSizeTally` keeps the running totals; `FolderSizeWalker`
+is the generic walk through `CreateProvider()` (a subfolder whose listing fails is skipped, as `du` does).
+- OneDrive: a folder's `size` in Graph is already the total below it — one listing of the folder.
+- Dropbox: `list_folder` with `recursive: true`, a snapshot per 2000 entries; names case-insensitive.
+- S3: every key under the prefix (no delimiter), a snapshot per 1000.
+- GitHub: one `ListRecursiveAsync` (LFS files at their real size).
+- Yandex Disk: no folder sizes and no recursive listing — the flat `resources/files` list of the whole disk, 5000 per
+  request (the server may apply a smaller limit and says so), whichever folder asks. The finished count covers every
+  folder of the disk and answers any folder of the same `IDiskApi` for `FolderSizesCacheDuration` (2 min); every write
+  through a provider or a file item of that `IDiskApi` drops it. Folders with no file below are not in the list.
+- Google Drive: no folder sizes — level by level, the children of up to 40 folders per query
+  (`('a' in parents or 'b' in parents) and trashed = false`, 1000 per page). Shortcuts are not followed; Google Docs
+  files add nothing; two subfolders with one name share a total.
+- FTP (one listing at a time), SFTP (two), WebDAV (four): `FolderSizeWalker`.
+- Local does not implement it: a client walks the disk itself (X-Filer has its own cached walk).
+
 ## IPublicLinkItem
 
 Optional: a file or folder that can be shared by a public view-only link. Implemented by the Yandex Disk and Google

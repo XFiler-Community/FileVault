@@ -3,7 +3,7 @@ using Renci.SshNet;
 
 namespace FileVault.Sftp;
 
-public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFileProvider
+public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFileProvider, IFolderSizeProvider
 {
     public string Name => Path.GetFileName(remotePath.TrimEnd('/')) is { Length: > 0 } n ? n : remotePath;
     public string FullName => $"sftp://{client.ConnectionInfo.Host}{remotePath}";
@@ -24,6 +24,10 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
                 yield return new SftpFileItem(item, client);
         }
     }
+
+    /// <summary>Every folder below is listed, two at a time over the one SSH session.</summary>
+    public IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(CancellationToken ct = default) =>
+        FolderSizeWalker.MeasureAsync(this, maxParallelism: 2, ct: ct);
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
     {

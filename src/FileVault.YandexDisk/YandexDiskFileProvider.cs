@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Net;
 using XFiler.YandexDisk.Client;
 using XFiler.YandexDisk.Client.Clients;
@@ -6,10 +7,20 @@ using FileVault.Core;
 
 namespace FileVault.YandexDisk;
 
-public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : ISearchableFileProvider
+public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : ISearchableFileProvider, IFolderSizeProvider
 {
     private const int PageSize = 20;
     private const int SearchPageSize = 1000;
+    private const int SizesPageSize = 5000;
+
+    // One whole-disk count per account, reused for any folder while it is fresh
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IDiskApi, DiskSizes> KnownSizes = new();
+
+    // Bumped by every write, so a count that was running meanwhile is not kept
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IDiskApi, StrongBox<int>> Writes = new();
+
+    /// <summary>How long a finished count of the disk answers <see cref="MeasureFoldersAsync"/> for any of its folders.</summary>
+    public static TimeSpan FolderSizesCacheDuration { get; set; } = TimeSpan.FromMinutes(2);
 
     public string Name => remotePath.TrimEnd('/').Split('/').Last() is { Length: > 0 } n ? n : "disk";
     public string FullName => remotePath;
@@ -106,6 +117,90 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
         }
     }
 
+    /// <summary>
+    /// Yandex Disk keeps no folder sizes, so this pages through the flat list of every file on the disk
+    /// (<c>resources/files</c>) and adds up those below this folder, a snapshot per page — as many requests as the disk
+    /// has thousands of files, whichever folder it starts in. The finished count covers every folder of the disk:
+    /// for <see cref="FolderSizesCacheDuration"/> any folder of the same <see cref="IDiskApi"/> is answered from it
+    /// at once. A folder with no file at any depth below it is not in the list (0 bytes).
+    /// </summary>
+    public async IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var folder = SearchPrefix(remotePath).TrimEnd('/');
+
+        if (KnownSizes.TryGetValue(api, out var known) && DateTimeOffset.UtcNow - known.CountedAt < FolderSizesCacheDuration)
+        {
+            yield return known.Of(folder);
+            yield break;
+        }
+
+        var writes = Writes.GetOrCreateValue(api);
+        var writesBefore = Volatile.Read(ref writes.Value);
+        var tally = new FolderSizeTally();
+        var disk = new Dictionary<string, long>(StringComparer.Ordinal);
+        var offset = 0;
+
+        while (true)
+        {
+            var page = await api.MetaInfo.GetFilesInfoAsync(
+                new FilesResourceRequest { Limit = SizesPageSize, Offset = offset }, ct).ConfigureAwait(false);
+
+            var files = page.Items;
+
+            foreach (var file in files)
+            {
+                if (FolderSizeTally.SubfolderOf(folder, file.Path) is { } subfolder)
+                    tally.Add(subfolder, file.Size);
+
+                for (var slash = file.Path.LastIndexOf('/'); slash > 0; slash = file.Path.LastIndexOf('/', slash - 1))
+                {
+                    var ancestor = file.Path[..slash];
+                    disk[ancestor] = disk.GetValueOrDefault(ancestor) + file.Size;
+                }
+            }
+
+            offset += files.Count;
+
+            if (files.Count == 0 || files.Count < (page.Limit > 0 ? page.Limit : SizesPageSize))
+                break;
+
+            yield return tally.Snapshot(isComplete: false);
+        }
+
+        if (Volatile.Read(ref writes.Value) == writesBefore)
+            KnownSizes.AddOrUpdate(api, new DiskSizes(disk, DateTimeOffset.UtcNow));
+
+        yield return tally.Snapshot(isComplete: true);
+    }
+
+    /// <summary>A write through this account: its count of the disk is not true any more.</summary>
+    internal static void ForgetSizes(IDiskApi api)
+    {
+        Interlocked.Increment(ref Writes.GetOrCreateValue(api).Value);
+        KnownSizes.Remove(api);
+    }
+
+    /// <summary>Bytes below every folder of a disk that has files, by its path (<c>disk:/a/b</c>).</summary>
+    private sealed class DiskSizes(Dictionary<string, long> bytes, DateTimeOffset countedAt)
+    {
+        public DateTimeOffset CountedAt => countedAt;
+
+        public FolderSizes Of(string folder)
+        {
+            var tally = new FolderSizeTally();
+
+            foreach (var (path, size) in bytes)
+            {
+                if (FolderSizeTally.SubfolderOf(folder, path, isFolder: true) is { } subfolder &&
+                    path.Length == folder.Length + 1 + subfolder.Length)
+                    tally.Add(subfolder, size);
+            }
+
+            return tally.Snapshot(isComplete: true);
+        }
+    }
+
     private static bool NameMatches(string name, string query)
         => name.Contains(query, StringComparison.OrdinalIgnoreCase);
 
@@ -130,6 +225,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         try
         {
             var resolvedName = await ResolveFolderNameAsync(name, ct).ConfigureAwait(false);
@@ -146,6 +243,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
 
     public async Task<FileOperationResult<IFileItem>> CreateEmptyTextFileAsync(string name, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         try
         {
             var path = CombinePath(remotePath, name);
@@ -163,6 +262,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
     public async Task<FileOperationResult<IReadOnlyList<IFileProviderItem>>> DeleteAsync(
         IReadOnlyList<IFileProviderItem> items, bool toRecycleBin, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         try
         {
             foreach (var item in items)
@@ -182,6 +283,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
 
     public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         try
         {
             var newPath = CombinePath(GetParentPath(item.FullName), newName);
@@ -199,6 +302,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
     public async Task<FileOperationResult<IFileItem>> CopyFileInAsync(IFileItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         try
         {
             if (sourceItem is YandexDiskFileItem ydItem && IsSameAccount(ydItem.Api))
@@ -229,6 +334,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
     public async Task<FileOperationResult<IFileItem>> MoveFileInAsync(IFileItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         try
         {
             if (sourceItem is YandexDiskFileItem ydItem && IsSameAccount(ydItem.Api))
@@ -257,6 +364,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
     public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         if (sourceItem is not YandexDiskFolderItem ydFolder || !IsSameAccount(ydFolder.Api))
             return FileOperationResult<IFolderItem?>.Success(null);
 
@@ -278,6 +387,8 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
     public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
+        ForgetSizes(api);
+
         if (sourceItem is not YandexDiskFolderItem ydFolder || !IsSameAccount(ydFolder.Api))
             return FileOperationResult<IFolderItem?>.Success(null);
 

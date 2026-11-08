@@ -235,7 +235,7 @@ internal sealed class FakeDropbox : HttpMessageHandler
 
     private HttpResponseMessage Dispatch(string route, JsonNode? input, byte[] body, string token) => route switch
     {
-        "files/list_folder" => ListFolder(Path(input, "path")),
+        "files/list_folder" => ListFolder(Path(input, "path"), input?["recursive"]?.GetValue<bool>() == true),
         "files/list_folder/continue" => ListContinue(Str(input, "cursor")),
         "files/get_metadata" => Ok(Metadata(Lookup(Path(input, "path"), "path"))),
         "files/create_folder_v2" => CreateFolder(Path(input, "path")),
@@ -264,7 +264,7 @@ internal sealed class FakeDropbox : HttpMessageHandler
 
     // ── Files ───────────────────────────────────────────────────────────────
 
-    private HttpResponseMessage ListFolder(string path)
+    private HttpResponseMessage ListFolder(string path, bool recursive)
     {
         if (path.Length > 0)
         {
@@ -274,7 +274,11 @@ internal sealed class FakeDropbox : HttpMessageHandler
                 throw Conflict("path/not_folder/..", Tagged("path", Tagged("not_folder")));
         }
 
-        var entries = Children(path).OrderBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+        // recursive: like Dropbox, the folder itself (unless root) and everything below it
+        var nodes = recursive
+            ? path.Length == 0 ? _nodes.Values : Tree(path)
+            : Children(path);
+        var entries = nodes.OrderBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
             .Select(n => (JsonNode)Metadata(n)).ToList();
         return ListPage(entries);
     }

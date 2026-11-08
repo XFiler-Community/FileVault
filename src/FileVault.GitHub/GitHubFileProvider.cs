@@ -7,7 +7,8 @@ namespace FileVault.GitHub;
 /// so a new folder holds an empty <c>.gitkeep</c>. Deleting is always undoable from the history, so a delete to the
 /// recycle bin is a plain delete commit. Files tracked by Git LFS are read through LFS but not written.
 /// </summary>
-public sealed class GitHubFileProvider(GitHubRepository repository, string path = "") : IFileProvider
+public sealed class GitHubFileProvider(GitHubRepository repository, string path = "")
+    : IFileProvider, IFolderSizeProvider
 {
     private const string KeepFileName = ".gitkeep";
 
@@ -34,6 +35,37 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
             if (filter.ShowHiddenItems || !entry.Name.StartsWith('.'))
                 yield return new GitHubFileItem(repository, entry, head.Date);
         }
+    }
+
+    /// <summary>
+    /// One recursive tree of this folder (<see cref="GitHubRepository.ListRecursiveAsync"/>), with the real sizes of
+    /// Git LFS files.
+    /// </summary>
+    public async IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var entries = await repository.ListRecursiveAsync(path, ct: ct).ConfigureAwait(false);
+        var prefix = path.Length == 0 ? "" : path + "/";
+        var tally = new FolderSizeTally();
+
+        foreach (var entry in entries)
+        {
+            if (!entry.Path.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+
+            var relative = entry.Path.AsSpan(prefix.Length);
+            var slash = relative.IndexOf('/');
+
+            if (slash > 0)
+            {
+                if (entry.Kind != GitHubEntryKind.Folder)
+                    tally.Add(relative[..slash].ToString(), entry.Size);
+            }
+            else if (slash < 0 && entry.Kind == GitHubEntryKind.Folder && relative.Length > 0)
+                tally.AddFolder(relative.ToString());
+        }
+
+        yield return tally.Snapshot(isComplete: true);
     }
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)

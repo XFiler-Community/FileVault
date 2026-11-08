@@ -7,7 +7,7 @@ namespace FileVault.WebDav;
 /// (COPY / MOVE with <c>Overwrite: F</c>); uploads go to a temp name in the destination folder and are moved over the
 /// destination only when complete. WebDAV has no trash: <c>DeleteAsync(toRecycleBin: true)</c> is refused.
 /// </summary>
-public sealed class WebDavFileProvider : IFileProvider
+public sealed class WebDavFileProvider : IFileProvider, IFolderSizeProvider
 {
     private readonly WebDavConnection _connection;
     private readonly string _path;
@@ -59,6 +59,10 @@ public sealed class WebDavFileProvider : IFileProvider
             yield return new WebDavFileItem(_connection, file.Path, file.Length ?? 0,
                 file.LastModified ?? DateTimeOffset.MinValue);
     }
+
+    /// <summary>Every folder below is listed (PROPFIND, depth 1), four at a time: servers rarely allow depth infinity.</summary>
+    public IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(CancellationToken ct = default) =>
+        FolderSizeWalker.MeasureAsync(this, maxParallelism: 4, ct: ct);
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
     {
