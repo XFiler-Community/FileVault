@@ -13,7 +13,7 @@ namespace FileVault.Dropbox;
 /// </summary>
 public sealed class DropboxClient
 {
-    private const int ListPageLimit = 2000;
+    internal const int ListPageLimit = 2000;
     private const int SearchPageSize = 200;
 
     private static DropboxJsonContext Json => DropboxJsonContext.Default;
@@ -83,11 +83,18 @@ public sealed class DropboxClient
     }
 
     /// <summary>The entries of a folder, page by page (<c>list_folder</c> + <c>list_folder/continue</c>).</summary>
-    public async IAsyncEnumerable<DropboxEntry> ListAsync(string folderPath,
+    public IAsyncEnumerable<DropboxEntry> ListAsync(string folderPath, CancellationToken ct = default) =>
+        ListAsync(folderPath, recursive: false, ct);
+
+    /// <summary>
+    /// The entries of a folder, or with <paramref name="recursive"/> of the folder and everything below it, page by
+    /// page (<c>list_folder</c> + <c>list_folder/continue</c>).
+    /// </summary>
+    public async IAsyncEnumerable<DropboxEntry> ListAsync(string folderPath, bool recursive,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var page = await Api.RpcAsync("files/list_folder",
-            new ApiListFolderArg(DropboxPath.Normalize(folderPath), false, ListPageLimit), Json.ApiListFolderArg,
+            new ApiListFolderArg(DropboxPath.Normalize(folderPath), recursive, ListPageLimit), Json.ApiListFolderArg,
             Json.ApiListFolderResult, ct).ConfigureAwait(false);
 
         while (true)

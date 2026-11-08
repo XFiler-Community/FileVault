@@ -3,7 +3,7 @@ using FluentFTP;
 
 namespace FileVault.Ftp;
 
-public sealed class FtpFileProvider(AsyncFtpClient client, string remotePath) : IFileProvider
+public sealed class FtpFileProvider(AsyncFtpClient client, string remotePath) : IFileProvider, IFolderSizeProvider
 {
     public string Name => Path.GetFileName(remotePath.TrimEnd('/')) is { Length: > 0 } n ? n : remotePath;
     public string FullName => $"ftp://{client.Host}{remotePath}";
@@ -23,6 +23,10 @@ public sealed class FtpFileProvider(AsyncFtpClient client, string remotePath) : 
                 yield return new FtpFileItem(item, client);
         }
     }
+
+    /// <summary>Every folder below is listed, one at a time: one FTP connection serves one command at a time.</summary>
+    public IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(CancellationToken ct = default) =>
+        FolderSizeWalker.MeasureAsync(this, maxParallelism: 1, ct: ct);
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
     {

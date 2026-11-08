@@ -28,8 +28,11 @@ public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api) 
     }
 
     public async Task DeleteAsync(CancellationToken ct = default)
-        => await api.Commands.DeleteAndWaitAsync(
+    {
+        YandexDiskFileProvider.ForgetSizes(api);
+        await api.Commands.DeleteAndWaitAsync(
             new DeleteFileRequest { Path = resource.Path, Permanently = true }, ct).ConfigureAwait(false);
+    }
 
     /// <summary>Publishes the file on Yandex Disk; an already published file keeps its link.</summary>
     public Task<FileOperationResult<Uri>> GetPublicLinkAsync(CancellationToken ct = default)

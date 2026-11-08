@@ -13,7 +13,7 @@ namespace FileVault.OneDrive;
 /// New folders and new empty files never replace (<c>conflictBehavior=fail</c>).
 /// </remarks>
 public sealed class OneDriveFileProvider(OneDriveClient client, string folderId = OneDriveClient.RootId, string? name = null)
-    : ISearchableFileProvider
+    : ISearchableFileProvider, IFolderSizeProvider
 {
     private const string Replace = "replace";
     private const string Fail = "fail";
@@ -55,6 +55,21 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
     {
         await foreach (var item in client.SearchAsync(folderId, query, ct).ConfigureAwait(false))
             yield return client.ToItem(item);
+    }
+
+    /// <summary>OneDrive keeps the size of every folder (all files below it): one listing of this folder.</summary>
+    public async IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var tally = new FolderSizeTally(StringComparer.OrdinalIgnoreCase);
+
+        await foreach (var item in client.ListChildrenAsync(folderId, ct).ConfigureAwait(false))
+        {
+            if (item.Folder is not null && item.RemoteItem is null)
+                tally.Add(item.Name, item.Size ?? 0);
+        }
+
+        yield return tally.Snapshot(isComplete: true);
     }
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)

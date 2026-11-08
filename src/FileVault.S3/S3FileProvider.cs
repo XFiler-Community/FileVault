@@ -7,7 +7,7 @@ namespace FileVault.S3;
 /// object. S3 has no rename or move, so both are a server-side copy and a delete — for a folder, of every key under
 /// it. There is no trash: a delete to the recycle bin is refused.
 /// </summary>
-public sealed class S3FileProvider : ISearchableFileProvider
+public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvider
 {
     private readonly S3Connection _connection;
     private readonly string _path;
@@ -111,6 +111,32 @@ public sealed class S3FileProvider : ISearchableFileProvider
             if (fileName.Length > 0 && Matches(fileName, query))
                 yield return new S3FileItem(_connection, entry.Key, entry.Size, entry.LastModified, entry.ETag);
         }
+    }
+
+    /// <summary>One listing of every key under the prefix (no delimiter), a snapshot per page of 1000.</summary>
+    public async IAsyncEnumerable<FolderSizes> MeasureFoldersAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var prefix = S3Path.Prefix(_path);
+        var tally = new FolderSizeTally();
+        var counted = 0;
+
+        await foreach (var entry in Client.ListAllAsync(prefix, ct).ConfigureAwait(false))
+        {
+            if (!entry.Key.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+
+            var relative = entry.Key.AsSpan(prefix.Length);
+            var slash = relative.IndexOf('/');
+
+            if (slash > 0)
+                tally.Add(relative[..slash].ToString(), entry.Size);
+
+            if (++counted % 1000 == 0)
+                yield return tally.Snapshot(isComplete: false);
+        }
+
+        yield return tally.Snapshot(isComplete: true);
     }
 
     public async Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
