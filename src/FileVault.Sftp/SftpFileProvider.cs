@@ -89,17 +89,41 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
         }
     }
 
-    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default)
+    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default)
     {
         try
         {
             var newPath = CombinePath(GetParentPath(item.FullName), newName);
             await client.RenameFileAsync(item.FullName, newPath, ct).ConfigureAwait(false);
-            return FileOperationResult<bool>.Success(true);
+
+            return FileOperationResult<IFileProviderItem>.Success(
+                await ReadRenamedAsync(newPath, item is IFolderItem, ct).ConfigureAwait(false));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
+        }
+    }
+
+    // The rename has happened: a failed read-back must not report it as failed, so it falls back to a placeholder.
+    private async Task<IFileProviderItem> ReadRenamedAsync(string path, bool isFolder, CancellationToken ct)
+    {
+        try
+        {
+            var file = await client.GetAsync(path, ct).ConfigureAwait(false);
+            return file.IsDirectory ? new SftpFolderItem(file, client) : new SftpFileItem(file, client);
+        }
+        catch (Exception) when (!isFolder)
+        {
+            return new SftpPlaceholderFileItem(path);
+        }
+        catch (Exception)
+        {
+            return new SftpPlaceholderFolderItem(path, client);
         }
     }
 

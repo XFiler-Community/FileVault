@@ -445,8 +445,8 @@ var deleted = await provider.DeleteAsync([item], toRecycleBin: true);
 if (deleted.Exception is NotSupportedException)
     deleted = await provider.DeleteAsync([item], toRecycleBin: false); // permanent — confirm with the user first
 
-// Rename
-await provider.RenameAsync(item, "new-name.txt");
+// Rename — returns the item under its new name (RenameAsync returns just bool)
+var renamed = await provider.RenameItemAsync(item, "new-name.txt");
 
 // Resolve a unique destination path (file is NOT created on disk)
 var dest = await provider.ResolveDestinationFileAsync(sourceFile, overwrite: false);

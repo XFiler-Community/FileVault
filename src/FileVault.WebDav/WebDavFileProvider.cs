@@ -135,6 +135,14 @@ public sealed class WebDavFileProvider : IFileProvider, IFolderSizeProvider, IPa
     }
 
     public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>
+    /// One <c>MOVE</c>. The renamed item keeps the item's size and date — a MOVE changes neither — so no PROPFIND
+    /// follows.
+    /// </summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
         CancellationToken ct = default)
     {
         try
@@ -144,17 +152,21 @@ public sealed class WebDavFileProvider : IFileProvider, IFolderSizeProvider, IPa
             var to = WebDavPath.Combine(WebDavPath.Parent(from), newName);
 
             if (from == to)
-                return FileOperationResult<bool>.Success(true);
+                return FileOperationResult<IFileProviderItem>.Success(item);
 
-            if (!await Client.TransferAsync(move: true, from, to, item is IFolderItem, overwrite: false, ct)
+            var isFolder = item is IFolderItem;
+            if (!await Client.TransferAsync(move: true, from, to, isFolder, overwrite: false, ct)
                     .ConfigureAwait(false))
                 throw new IOException($"'{newName}' already exists.");
 
-            return FileOperationResult<bool>.Success(true);
+            IFileProviderItem renamed = isFolder
+                ? new WebDavFolderItem(_connection, to, item.ChangedDate)
+                : new WebDavFileItem(_connection, to, item.Size ?? 0, item.ChangedDate);
+            return FileOperationResult<IFileProviderItem>.Success(renamed);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
         }
     }
 

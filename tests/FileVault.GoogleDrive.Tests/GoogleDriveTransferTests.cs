@@ -45,6 +45,44 @@ public class GoogleDriveTransferTests
     }
 
     [Test]
+    public async Task RenameItemAsync_ReturnsTheItemFromTheUpdateAnswer()
+    {
+        HttpRequestMessage? sent = null;
+        using var service = CreateService(request =>
+        {
+            sent = request;
+            return Json(HttpStatusCode.OK,
+                """{"id":"folder-id","name":"Reports","mimeType":"application/vnd.google-apps.folder","modifiedTime":"2026-01-02T03:04:05Z"}""");
+        });
+        var provider = new GoogleDriveFileProvider(service, "root");
+        var folder = new GoogleDriveFolderItem(
+            new DriveFile { Id = "folder-id", Name = "Drafts", MimeType = "application/vnd.google-apps.folder" }, service);
+
+        var result = await provider.RenameItemAsync(folder, "Reports");
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(sent!.Method, Is.EqualTo(HttpMethod.Patch));
+        Assert.That(sent.RequestUri!.AbsolutePath, Does.EndWith("/files/folder-id"));
+        Assert.That(Uri.UnescapeDataString(sent.RequestUri.Query), Does.Contain("mimeType"));
+        Assert.That(result.Result, Is.InstanceOf<GoogleDriveFolderItem>());
+        Assert.That(result.Result!.Name, Is.EqualTo("Reports"));
+        Assert.That(result.Result.FullName, Is.EqualTo("gdrive:folder-id"));
+    }
+
+    [Test]
+    public async Task RenameItemAsync_Refused_ReturnsFailure()
+    {
+        using var service = CreateService(_ => Json(HttpStatusCode.Forbidden, ErrorJson));
+        var provider = new GoogleDriveFileProvider(service, "root");
+        var file = new GoogleDriveFileItem(new DriveFile { Id = "file-id", Name = "a.txt" }, service);
+
+        var result = await provider.RenameItemAsync(file, "b.txt");
+
+        Assert.That(result.IsSuccess, Is.False);
+        Assert.That((await provider.RenameAsync(file, "b.txt")).IsSuccess, Is.False);
+    }
+
+    [Test]
     public async Task CreateEmptyTextFileAsync_UploadFails_ReturnsFailure()
     {
         using var service = CreateService(_ => Json(HttpStatusCode.Forbidden, ErrorJson));

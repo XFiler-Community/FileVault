@@ -285,7 +285,12 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
         }
     }
 
-    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default)
+    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>A move within the parent folder, then one read of the moved resource.</summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default)
     {
         ForgetSizes(api);
 
@@ -295,11 +300,34 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
             await api.Commands.MoveAndWaitAsync(
                 new MoveFileRequest { From = item.FullName, Path = newPath, Overwrite = false }, ct)
                 .ConfigureAwait(false);
-            return FileOperationResult<bool>.Success(true);
+
+            return FileOperationResult<IFileProviderItem>.Success(
+                await ReadRenamedAsync(newPath, item is IFolderItem, ct).ConfigureAwait(false));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
+        }
+    }
+
+    // The move has happened: a failed read-back must not report it as failed, so it falls back to a placeholder.
+    private async Task<IFileProviderItem> ReadRenamedAsync(string path, bool isFolder, CancellationToken ct)
+    {
+        try
+        {
+            var resource = await api.MetaInfo.GetInfoAsync(new ResourceRequest { Path = path, Limit = 1 }, ct)
+                .ConfigureAwait(false);
+            return resource.Type == ResourceType.Dir
+                ? new YandexDiskFolderItem(resource, api)
+                : new YandexDiskFileItem(resource, api);
+        }
+        catch (Exception) when (!isFolder)
+        {
+            return new YandexDiskPlaceholderFileItem(path);
+        }
+        catch (Exception)
+        {
+            return new YandexDiskPlaceholderFolderItem(path, api);
         }
     }
 

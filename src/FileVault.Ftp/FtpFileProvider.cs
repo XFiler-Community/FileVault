@@ -87,21 +87,55 @@ public sealed class FtpFileProvider(AsyncFtpClient client, string remotePath) : 
         }
     }
 
-    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default)
+    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>
+    /// The renamed item is read back with MLST when the server has it; otherwise it keeps the item's size and date,
+    /// which a rename does not change.
+    /// </summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default)
     {
         try
         {
             var dir = GetParentPath(item.FullName);
             var newPath = CombinePath(dir, newName);
-            if (item is IFileItem)
+            var isFile = item is IFileItem;
+            if (isFile)
                 await client.MoveFile(item.FullName, newPath, FtpRemoteExists.Overwrite, ct).ConfigureAwait(false);
             else
                 await client.MoveDirectory(item.FullName, newPath, FtpRemoteExists.Overwrite, ct).ConfigureAwait(false);
-            return FileOperationResult<bool>.Success(true);
+
+            var listing = await TryGetObjectInfoAsync(newPath, ct).ConfigureAwait(false)
+                ?? new FtpListItem
+                {
+                    Name = newName,
+                    FullName = newPath,
+                    Type = isFile ? FtpObjectType.File : FtpObjectType.Directory,
+                    Size = item.Size ?? 0,
+                    Modified = item.ChangedDate.LocalDateTime
+                };
+
+            IFileProviderItem renamed = isFile ? new FtpFileItem(listing, client) : new FtpFolderItem(listing, client);
+            return FileOperationResult<IFileProviderItem>.Success(renamed);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
+        }
+    }
+
+    // The rename has happened: a failed read-back must not report it as failed.
+    private async Task<FtpListItem?> TryGetObjectInfoAsync(string path, CancellationToken ct)
+    {
+        try
+        {
+            return await client.GetObjectInfo(path, token: ct).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 

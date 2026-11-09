@@ -220,6 +220,14 @@ public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvide
     }
 
     public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>
+    /// S3 cannot rename: a file is copied to the new key and deleted, a folder moved key by key. The renamed file is
+    /// a new object — dated now, its ETag unknown until it is listed again.
+    /// </summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
         CancellationToken ct = default)
     {
         try
@@ -229,7 +237,7 @@ public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvide
             var to = S3Path.Combine(S3Path.Parent(from), newName);
 
             if (to == from)
-                return FileOperationResult<bool>.Success(true);
+                return FileOperationResult<IFileProviderItem>.Success(item);
 
             if (await ExistsAsync(to, ct).ConfigureAwait(false))
                 throw new IOException($"'{newName}' already exists.");
@@ -237,19 +245,20 @@ public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvide
             if (isFolder)
             {
                 await MovePrefixAsync(_connection, from, to, null, ct).ConfigureAwait(false);
-            }
-            else
-            {
-                var size = item is S3FileItem file ? file.Size : await SizeOfAsync(from, ct).ConfigureAwait(false);
-                await Client.CopyObjectAsync(_connection, from, size, to, null, ct).ConfigureAwait(false);
-                await Client.DeleteAsync(from, ct).ConfigureAwait(false);
+                return FileOperationResult<IFileProviderItem>.Success(
+                    new S3FolderItem(_connection, to, item.ChangedDate));
             }
 
-            return FileOperationResult<bool>.Success(true);
+            var size = item is S3FileItem file ? file.Size : await SizeOfAsync(from, ct).ConfigureAwait(false);
+            await Client.CopyObjectAsync(_connection, from, size, to, null, ct).ConfigureAwait(false);
+            await Client.DeleteAsync(from, ct).ConfigureAwait(false);
+
+            return FileOperationResult<IFileProviderItem>.Success(
+                new S3FileItem(_connection, to, size, DateTimeOffset.Now, null));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
         }
     }
 

@@ -126,6 +126,11 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
     }
 
     public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>One commit moving the entry; a renamed file is read from the new head (no request: it is cached).</summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
         CancellationToken ct = default)
     {
         try
@@ -135,7 +140,7 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
             var to = GitHubPath.Combine(GitHubPath.Parent(from), newName);
 
             if (to == from)
-                return FileOperationResult<bool>.Success(true);
+                return FileOperationResult<IFileProviderItem>.Success(item);
 
             if (await repository.FindAsync(to, ct: ct).ConfigureAwait(false) is not null)
                 throw new IOException($"'{newName}' already exists.");
@@ -143,11 +148,14 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
             await repository.CommitAsync([GitHubChange.Move(from, to)], $"Rename {from} to {to}", null, ct)
                 .ConfigureAwait(false);
 
-            return FileOperationResult<bool>.Success(true);
+            IFileProviderItem renamed = item is IFolderItem
+                ? new GitHubFolderItem(repository, to, DateTimeOffset.Now)
+                : await FindRenamedFileAsync(to, newName, ct).ConfigureAwait(false);
+            return FileOperationResult<IFileProviderItem>.Success(renamed);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
         }
     }
 
@@ -338,6 +346,19 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
         await repository.CommitAsync([GitHubChange.Put(file, content)], message, null, ct).ConfigureAwait(false);
 
         return await FindFileAsync(file, ct).ConfigureAwait(false);
+    }
+
+    // The commit has landed: a failed read-back must not report the rename as failed.
+    private async Task<IFileItem> FindRenamedFileAsync(string file, string name, CancellationToken ct)
+    {
+        try
+        {
+            return await FindFileAsync(file, ct).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return new GitHubPlaceholderFileItem(repository.FullName(file), name);
+        }
     }
 
     private async Task<IFileItem> FindFileAsync(string file, CancellationToken ct)

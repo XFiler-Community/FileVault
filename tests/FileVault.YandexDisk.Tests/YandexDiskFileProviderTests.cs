@@ -517,6 +517,37 @@ public class YandexDiskFileProviderTests
         return found;
     }
 
+    [Test]
+    public async Task RenameItemAsync_MovesWithinTheFolderAndReadsTheResourceBack()
+    {
+        var api = new FakeDiskApi { GetInfo = r => FileResource(r.Path, size: 42) };
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+        var item = new YandexDiskFileItem(FileResource("disk:/Docs/a.txt", 42), api);
+
+        var result = await provider.RenameItemAsync(item, "b.txt");
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(api.Moves, Is.EqualTo(new[] { ("disk:/Docs/a.txt", "disk:/Docs/b.txt") }));
+        Assert.That(result.Result, Is.InstanceOf<YandexDiskFileItem>());
+        Assert.That(result.Result!.FullName, Is.EqualTo("disk:/Docs/b.txt"));
+        Assert.That(result.Result.Size, Is.EqualTo(42));
+    }
+
+    [Test]
+    public async Task RenameItemAsync_AFailedReadBackStillReportsTheRename()
+    {
+        var api = new FakeDiskApi { GetInfo = _ => throw new HttpRequestException("Network is unreachable") };
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+        var folder = new YandexDiskFolderItem(FolderResource("disk:/Docs/Old"), api);
+
+        var result = await provider.RenameItemAsync(folder, "New");
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(result.Result, Is.InstanceOf<IFolderItem>());
+        Assert.That(result.Result!.FullName, Is.EqualTo("disk:/Docs/New"));
+        Assert.That(await provider.RenameAsync(folder, "New"), Has.Property("IsSuccess").True);
+    }
+
     private static Resource FolderResource(string path) => new()
     {
         Name = path[(path.LastIndexOf('/') + 1)..],

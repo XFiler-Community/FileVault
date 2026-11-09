@@ -28,7 +28,9 @@ public class RcloneContractTests : FileProviderContractTests
     {
         // rclone keeps keys as files, so the zero-byte "name/" marker of an empty folder becomes a file "name"
         // (its documented limitation: no empty folders below the bucket). The in-memory S3 covers markers.
-        if (TestContext.CurrentContext.Test.MethodName == nameof(CreateFolderAsync_ReturnsItemAndCreatesDirectory))
+        // Renaming an empty folder has only that marker to write under the new name.
+        if (TestContext.CurrentContext.Test.MethodName is nameof(CreateFolderAsync_ReturnsItemAndCreatesDirectory)
+            or nameof(RenameItemAsync_Folder_ReturnsFolderItemUnderNewName))
             Assert.Ignore("rclone serve s3 cannot keep folder markers; covered by S3FakeContractTests.");
     }
 
