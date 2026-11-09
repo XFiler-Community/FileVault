@@ -118,6 +118,48 @@ public abstract class FileProviderContractTests
     }
 
     [Test]
+    public async Task RenameItemAsync_File_ReturnsItemUnderNewName()
+    {
+        byte[] data = [7, 8, 9];
+        await SeedFileAsync("old.txt", data);
+        var old = (await Provider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync()).Single();
+
+        var result = await Provider.RenameItemAsync(old, "new.txt");
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        var renamed = result.Result as IFileItem;
+        Assert.That(renamed, Is.Not.Null);
+        Assert.That(renamed!.Name, Is.EqualTo("new.txt"));
+        Assert.That(await FileExistsAsync("old.txt"), Is.False);
+
+        var listed = (await Provider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync()).Single();
+        Assert.That(renamed.FullName, Is.EqualTo(listed.FullName), "the item must point at the renamed file");
+
+        var (stream, _) = await renamed.OpenReadAsync();
+        await using (stream)
+        {
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            Assert.That(buffer.ToArray(), Is.EqualTo(data));
+        }
+    }
+
+    [Test]
+    public async Task RenameItemAsync_Folder_ReturnsFolderItemUnderNewName()
+    {
+        await SeedFolderAsync("OldDir");
+        var old = (await Provider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync()).Single();
+
+        var result = await Provider.RenameItemAsync(old, "NewDir");
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(result.Result, Is.InstanceOf<IFolderItem>());
+        Assert.That(result.Result!.Name, Is.EqualTo("NewDir"));
+        Assert.That(await Provider.ContainsFolderAsync("NewDir"), Is.True);
+        Assert.That(await Provider.ContainsFolderAsync("OldDir"), Is.False);
+    }
+
+    [Test]
     public async Task ContainsFileAsync_ExistingFile_ReturnsTrue()
     {
         await SeedFileAsync("exists.txt", []);

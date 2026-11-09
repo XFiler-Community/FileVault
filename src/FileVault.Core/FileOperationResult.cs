@@ -13,6 +13,10 @@ public sealed class FileOperationResult<T>
     public static FileOperationResult<T> Success(T result) => new() { Result = result };
     public static FileOperationResult<T> Failure(Exception ex) => new() { Exception = ex };
 
+    /// <summary>The same outcome with the result mapped; a failure keeps its exception.</summary>
+    public FileOperationResult<TOther> Map<TOther>(Func<T, TOther> map) =>
+        IsSuccess ? FileOperationResult<TOther>.Success(map(Result!)) : FileOperationResult<TOther>.Failure(Exception!);
+
     public bool TryGetResult([NotNullWhen(true)] out T? result)
     {
         result = Result;

@@ -135,7 +135,8 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
 
 | Method | Rule |
 |---|---|
-| `GetItemsAsync` | Stream via `yield return`. Folders first, then files. Apply `FileProviderFilter` via `EnumerationOptions.AttributesToSkip` (local) or manual check (cloud). |
+| `GetItemsAsync` | Stream via `yield return`. Folders first, then files. Apply `FileProviderFilter` via `EnumerationOptions.AttributesToSkip` (local) or manual check (cloud). Never block the caller's thread: Local reads `DirectoryInfo.EnumerateFileSystemInfos` on the thread pool in batches of 256 and builds items from the directory entry (no stat per item); an SMB or `\\wsl.localhost` folder can take seconds. |
+| `RenameItemAsync` | Rename in place and return the item under its new name: from the backend's answer (Google Drive, Dropbox, OneDrive), a read-back (SFTP stat, Yandex Disk resource, FTP MLST, GitHub head) or the item's own metadata (WebDAV, FTP without MLST; S3 file dated now). A failed read-back after a successful rename returns a placeholder, never a Failure. `RenameAsync` (bool) stays for existing callers and delegates to it; the interface's default `RenameItemAsync` (for outside providers) re-lists the folder. |
 | `CreateFolderAsync` | Resolve name conflict before creating (append ` (2)`, ` (3)`, …). |
 | `CopyFileInAsync` | Always works cross-provider via `sourceItem.OpenReadAsync()` → upload. Same-provider may optimize server-side. Write through a temp file — see [Partial files](#partial-files). Pass `ct` into every read/write so cancellation stops the transfer mid-file. |
 | `MoveFileInAsync` | Same-drive/same-provider → native move. Cross-provider → `CopyFileInAsync` + `sourceItem.DeleteAsync()`. Source path == destination on the same provider → no-op. |

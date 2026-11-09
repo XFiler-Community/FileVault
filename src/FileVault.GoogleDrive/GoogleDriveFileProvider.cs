@@ -15,7 +15,8 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
     private const int ParentsPerQuery = 40;
     private const string FolderMimeType = GoogleDriveMimeTypes.Folder;
     private const string Scheme = "gdrive:";
-    private const string ListFields = "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, thumbnailLink)";
+    private const string ItemFields = "id, name, mimeType, size, modifiedTime, parents, thumbnailLink";
+    private const string ListFields = "nextPageToken, files(" + ItemFields + ")";
     private const string RootAlias = "root";
 
     public string Name => folderId == RootAlias ? "Google Drive" : folderId;
@@ -294,18 +295,29 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
         }
     }
 
-    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default)
+    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>One <c>files.update</c>; its answer is the renamed item (the id stays the same).</summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default)
     {
         try
         {
             var fileId = GetItemId(item);
-            await service.Files.Update(new DriveFile { Name = newName }, fileId)
-                .ExecuteAsync(ct).ConfigureAwait(false);
-            return FileOperationResult<bool>.Success(true);
+            var request = service.Files.Update(new DriveFile { Name = newName }, fileId);
+            request.Fields = ItemFields;
+            var updated = await request.ExecuteAsync(ct).ConfigureAwait(false);
+
+            IFileProviderItem renamed = updated.MimeType == FolderMimeType
+                ? new GoogleDriveFolderItem(updated, service)
+                : new GoogleDriveFileItem(updated, service);
+            return FileOperationResult<IFileProviderItem>.Success(renamed);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
         }
     }
 

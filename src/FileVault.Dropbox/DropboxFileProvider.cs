@@ -156,6 +156,11 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
     /// name in the same folder.
     /// </summary>
     public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>One <c>move_v2</c> (two for a case-only rename); its metadata is the renamed item.</summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
         CancellationToken ct = default)
     {
         try
@@ -164,12 +169,12 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
             var from = OwnPath(item);
             var to = DropboxPath.Combine(DropboxPath.Parent(from), newName);
 
-            await MoveWithinAsync(from, to, ct).ConfigureAwait(false);
-            return FileOperationResult<bool>.Success(true);
+            var entry = await MoveWithinAsync(from, to, ct).ConfigureAwait(false);
+            return FileOperationResult<IFileProviderItem>.Success(ToItem(entry));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
         }
     }
 

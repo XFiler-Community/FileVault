@@ -136,20 +136,26 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
     }
 
     public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>One <c>PATCH</c>; its answer is the renamed item (the id stays the same).</summary>
+    public async Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
         CancellationToken ct = default)
     {
         try
         {
             var id = OwnId(item);
 
-            if (newName != item.Name)
-                await client.UpdateAsync(id, newName, null, ct).ConfigureAwait(false);
+            if (newName == item.Name)
+                return FileOperationResult<IFileProviderItem>.Success(item);
 
-            return FileOperationResult<bool>.Success(true);
+            var updated = await client.UpdateAsync(id, newName, null, ct).ConfigureAwait(false);
+            return FileOperationResult<IFileProviderItem>.Success(client.ToItem(updated));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<bool>.Failure(ex);
+            return FileOperationResult<IFileProviderItem>.Failure(ex);
         }
     }
 

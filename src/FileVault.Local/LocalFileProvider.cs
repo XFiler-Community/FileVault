@@ -19,19 +19,63 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
         if (!filter.ShowHiddenItems) attrs |= FileAttributes.Hidden;
         var options = new EnumerationOptions { AttributesToSkip = attrs };
 
-        foreach (var dir in Directory.EnumerateDirectories(rootPath, "*", options))
+        // Reading a directory blocks — for seconds on an SMB share or \\wsl.localhost — so it runs on the thread
+        // pool a batch at a time, never on the caller's thread. Opening the directory is the first blocking call.
+        IEnumerator<FileSystemInfo>? entries = null;
+        var files = new List<IFileProviderItem>();
+
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            yield return new SystemFolderItem(new DirectoryInfo(dir), recycleBin);
+            entries = await Task.Run(
+                () => new DirectoryInfo(rootPath).EnumerateFileSystemInfos("*", options).GetEnumerator(), ct)
+                .ConfigureAwait(false);
+
+            var more = true;
+            while (more)
+            {
+                var batch = await Task.Run(() => ReadBatch(entries, ct), ct).ConfigureAwait(false);
+                more = batch.Count == ListingBatchSize;
+
+                foreach (var item in batch)
+                {
+                    if (item is IFolderItem)
+                        yield return item;
+                    else
+                        files.Add(item);
+                }
+            }
+        }
+        finally
+        {
+            entries?.Dispose();
         }
 
-        foreach (var file in Directory.EnumerateFiles(rootPath, "*", options))
+        foreach (var file in files)
         {
             ct.ThrowIfCancellationRequested();
-            yield return new SystemFileItem(new FileInfo(file));
+            yield return file;
+        }
+    }
+
+    private const int ListingBatchSize = 256;
+
+    // Items are made from the directory entry: attributes, times and size come with it, so no item costs a stat of
+    // its own. Folders come first in a listing, files after them.
+    private List<IFileProviderItem> ReadBatch(IEnumerator<FileSystemInfo> entries, CancellationToken ct)
+    {
+        var batch = new List<IFileProviderItem>(ListingBatchSize);
+
+        while (batch.Count < ListingBatchSize && entries.MoveNext())
+        {
+            ct.ThrowIfCancellationRequested();
+            batch.Add(entries.Current switch
+            {
+                DirectoryInfo dir => new SystemFolderItem(dir, recycleBin),
+                var info => new SystemFileItem((FileInfo)info)
+            });
         }
 
-        await Task.CompletedTask;
+        return batch;
     }
 
     public Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
@@ -92,23 +136,38 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
         }
     }
 
-    public Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default)
+    public async Task<FileOperationResult<bool>> RenameAsync(IFileProviderItem item, string newName, CancellationToken ct = default) =>
+        (await RenameItemAsync(item, newName, ct).ConfigureAwait(false)).Map(_ => true);
+
+    /// <summary>
+    /// Renames within the item's own folder — not necessarily this provider's (search results list items of
+    /// subfolders) — and reads the renamed item back from disk.
+    /// </summary>
+    public Task<FileOperationResult<IFileProviderItem>> RenameItemAsync(IFileProviderItem item, string newName,
+        CancellationToken ct = default)
     {
         try
         {
             var dir = Path.GetDirectoryName(item.FullName)!;
             var newPath = Path.Combine(dir, LocalFileNames.Validate(newName));
 
+            IFileProviderItem renamed;
             if (item is IFileItem)
+            {
                 File.Move(item.FullName, newPath);
+                renamed = new SystemFileItem(new FileInfo(newPath));
+            }
             else
+            {
                 Directory.Move(item.FullName, newPath);
+                renamed = new SystemFolderItem(new DirectoryInfo(newPath), recycleBin);
+            }
 
-            return Task.FromResult(FileOperationResult<bool>.Success(true));
+            return Task.FromResult(FileOperationResult<IFileProviderItem>.Success(renamed));
         }
         catch (Exception ex)
         {
-            return Task.FromResult(FileOperationResult<bool>.Failure(ex));
+            return Task.FromResult(FileOperationResult<IFileProviderItem>.Failure(ex));
         }
     }
 
