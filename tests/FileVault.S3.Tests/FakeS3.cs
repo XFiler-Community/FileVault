@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
@@ -25,6 +26,9 @@ internal sealed class FakeS3 : HttpMessageHandler
 
     public int PageSize { get; set; } = 1000;
     public bool SupportsUploadPartCopy { get; set; } = true;
+
+    /// <summary>GETs that asked for a byte range (answered with 206).</summary>
+    public int RangeRequests { get; private set; }
 
     /// <summary>"METHOD /path?query" of every request, plus " copy" when it carried x-amz-copy-source.</summary>
     public List<string> Requests { get; } = [];
@@ -132,6 +136,18 @@ internal sealed class FakeS3 : HttpMessageHandler
                         return method == "HEAD"
                             ? new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new ByteArrayContent([]) }
                             : Error(HttpStatusCode.NotFound, "NoSuchKey", "The specified key does not exist.");
+
+                    if (method == "GET" && request.Headers.Range?.Ranges.SingleOrDefault() is { From: { } from } asked)
+                    {
+                        RangeRequests++;
+                        var to = Math.Min(asked.To ?? data.Length - 1, data.Length - 1);
+                        var partial = new HttpResponseMessage(HttpStatusCode.PartialContent)
+                        {
+                            Content = new ByteArrayContent(data[(int)from..(int)(to + 1)])
+                        };
+                        partial.Content.Headers.ContentRange = new ContentRangeHeaderValue(from, to, data.Length);
+                        return partial;
+                    }
 
                     var response = new HttpResponseMessage(HttpStatusCode.OK)
                     {

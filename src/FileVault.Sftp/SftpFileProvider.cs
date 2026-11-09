@@ -3,8 +3,12 @@ using Renci.SshNet;
 
 namespace FileVault.Sftp;
 
-public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFileProvider, IFolderSizeProvider
+public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFileProvider, IFolderSizeProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // One SSH session multiplexes the requests; more than two mostly competes for its window.
+    public int MaxParallelTransfers => 2;
+
     public string Name => Path.GetFileName(remotePath.TrimEnd('/')) is { Length: > 0 } n ? n : remotePath;
     public string FullName => $"sftp://{client.ConnectionInfo.Host}{remotePath}";
 

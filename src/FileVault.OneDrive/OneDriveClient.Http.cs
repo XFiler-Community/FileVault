@@ -164,19 +164,27 @@ public sealed partial class OneDriveClient
     /// default handler follows it by itself and drops the Authorization header; a handler that does not follow
     /// redirects hands it here, and it is followed the same way — never with the token.
     /// </summary>
-    internal async Task<HttpResponseMessage> GetFollowingRedirectAsync(string relative, CancellationToken ct)
+    /// <param name="range">Bytes to ask for, sent to every hop; null for the whole content.</param>
+    internal async Task<HttpResponseMessage> GetFollowingRedirectAsync(string relative, CancellationToken ct,
+        RangeHeaderValue? range = null)
     {
-        var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, Resolve(relative)), true, false, ct,
-            HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+        var response = await SendAsync(() => WithRange(new HttpRequestMessage(HttpMethod.Get, Resolve(relative)), range),
+            true, false, ct, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
 
         for (var hops = 0; IsRedirect(response.StatusCode) && response.Headers.Location is { } location && hops < 5; hops++)
         {
             var target = location.IsAbsoluteUri ? location : new Uri(response.RequestMessage!.RequestUri!, location);
             response.Dispose();
-            response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, target), false, true, ct,
-                HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            response = await SendAsync(() => WithRange(new HttpRequestMessage(HttpMethod.Get, target), range), false, true,
+                ct, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
         }
 
         return response;
+    }
+
+    private static HttpRequestMessage WithRange(HttpRequestMessage request, RangeHeaderValue? range)
+    {
+        request.Headers.Range = range;
+        return request;
     }
 }

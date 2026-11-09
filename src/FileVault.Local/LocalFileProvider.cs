@@ -2,8 +2,12 @@ using FileVault.Core;
 
 namespace FileVault.Local;
 
-public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycleBin = null) : IFileProvider
+public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycleBin = null) : IFileProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // Disk I/O; the other side of a copy is usually a network backend.
+    public int MaxParallelTransfers => 4;
+
     public string Name => Path.GetFileName(rootPath.TrimEnd(Path.DirectorySeparatorChar)) is { Length: > 0 } n ? n : rootPath;
     public string FullName => rootPath;
 

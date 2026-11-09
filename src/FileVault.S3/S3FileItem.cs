@@ -33,7 +33,7 @@ public sealed class S3FileItem : IFileItem
     public string NameWithoutExtension => Path.GetFileNameWithoutExtension(Name);
 
     public Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default) =>
-        Connection.Client.GetAsync(Key, ct);
+        Connection.Client.OpenReadAsync(Key, Size, ct);
 
     public Task DeleteAsync(CancellationToken ct = default) => Connection.Client.DeleteAsync(Key, ct);
 }

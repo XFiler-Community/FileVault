@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Globalization;
+using FileVault.Core;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -15,6 +17,7 @@ internal sealed class S3Client(S3Connection connection, HttpClient http)
 {
     private const int DeleteBatchSize = 1000;
     private const long CopyPartSize = 512L * 1024 * 1024;
+    private const int ParallelParts = 4;
 
     private static readonly XNamespace Ns = "http://s3.amazonaws.com/doc/2006-03-01/";
     private static readonly UriCreationOptions RawUri = new() { DangerousDisablePathAndQueryCanonicalization = true };
@@ -136,6 +139,44 @@ internal sealed class S3Client(S3Connection connection, HttpClient http)
         }
     }
 
+    /// <summary>
+    /// The content of an object of <paramref name="size"/> bytes for sequential reading: a large one as several ranges
+    /// at once (<see cref="ParallelDownload"/>), since a single connection seldom fills the line.
+    /// </summary>
+    public async Task<(Stream stream, long totalBytes)> OpenReadAsync(string key, long size, CancellationToken ct)
+    {
+        var total = size;
+
+        var stream = await ParallelDownload.OpenAsync(size,
+            async (offset, count, token) =>
+            {
+                var response = await SendAsync(HttpMethod.Get, key,
+                    headers: [new("range", $"bytes={offset}-{offset + count - 1}")],
+                    completion: HttpCompletionOption.ResponseHeadersRead, ct: token).ConfigureAwait(false);
+
+                ParallelDownload.EnsurePartialContent(response, offset, count, size);
+
+                try
+                {
+                    var body = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+                    return new S3ResponseStream(response, body, count);
+                }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
+            },
+            async token =>
+            {
+                (var whole, total) = await GetAsync(key, token).ConfigureAwait(false);
+                return whole;
+            },
+            ct: ct).ConfigureAwait(false);
+
+        return (stream, total);
+    }
+
     // ── Writing ──────────────────────────────────────────────────────────────
 
     public async Task PutAsync(string key, ReadOnlyMemory<byte> body, string? contentType, CancellationToken ct)
@@ -151,8 +192,8 @@ internal sealed class S3Client(S3Connection connection, HttpClient http)
 
     /// <summary>
     /// Writes <paramref name="source"/> to <paramref name="key"/>: one streamed PUT when the length is known and up
-    /// to <see cref="S3Connection.MultipartThreshold"/>, otherwise parts read into one reused buffer — a source that
-    /// ends within the first part is one PUT too. A failed or cancelled multipart upload is aborted, so the old
+    /// to <see cref="S3Connection.MultipartThreshold"/>, otherwise parts, up to four in flight at once (a buffer each) — a source
+    /// that ends within the first part is one PUT too. A failed or cancelled multipart upload is aborted, so the old
     /// object, if any, stays as it was.
     /// </summary>
     public async Task UploadAsync(string key, Stream source, long length, IProgress<double>? progress,
@@ -179,32 +220,75 @@ internal sealed class S3Client(S3Connection connection, HttpClient http)
         }
 
         var uploadId = await CreateMultipartUploadAsync(key, ct).ConfigureAwait(false);
+        var etags = new ConcurrentDictionary<int, string>();
+        var inFlight = new List<Task>();
+        var spare = new ConcurrentBag<byte[]>();
+        using var failed = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        long sent = 0;
 
-        try
+        async Task UploadPart(int number, byte[] data, int size)
         {
-            var etags = new List<string>();
-            long sent = 0;
+            etags[number] = await UploadPartAsync(key, uploadId, number, data.AsMemory(0, size), failed.Token)
+                .ConfigureAwait(false);
+            spare.Add(data);
 
-            while (read > 0)
+            // Under the lock, so parts finishing at once never report progress out of order
+            lock (etags)
             {
-                if (etags.Count == S3Connection.MaxParts)
-                    throw new IOException($"'{key}' needs more than {S3Connection.MaxParts} parts; raise the part size.");
-
-                etags.Add(await UploadPartAsync(key, uploadId, etags.Count + 1, buffer.AsMemory(0, read), ct)
-                    .ConfigureAwait(false));
-
-                sent += read;
+                sent += size;
 
                 if (length > 0)
                     progress?.Report(Math.Min(1.0, (double)sent / length));
+            }
+        }
 
-                read = read < buffer.Length ? 0 : await ReadFullAsync(source, buffer, ct).ConfigureAwait(false);
+        try
+        {
+            var parts = 0;
+
+            while (true)
+            {
+                if (parts == S3Connection.MaxParts)
+                    throw new IOException($"'{key}' needs more than {S3Connection.MaxParts} parts; raise the part size.");
+
+                inFlight.Add(UploadPart(++parts, buffer, read));
+
+                if (read < buffer.Length)
+                    break;
+
+                // A few parts at once: each connection is limited on its own, and parts may arrive in any order
+                if (inFlight.Count >= ParallelParts)
+                {
+                    var finished = await Task.WhenAny(inFlight).ConfigureAwait(false);
+                    inFlight.Remove(finished);
+                    await finished.ConfigureAwait(false);
+                }
+
+                buffer = spare.TryTake(out var reused) ? reused : new byte[buffer.Length];
+                read = await ReadFullAsync(source, buffer, ct).ConfigureAwait(false);
+
+                if (read == 0)
+                    break;
             }
 
-            await CompleteMultipartUploadAsync(key, uploadId, etags, ct).ConfigureAwait(false);
+            await Task.WhenAll(inFlight).ConfigureAwait(false);
+
+            await CompleteMultipartUploadAsync(key, uploadId,
+                etags.OrderBy(e => e.Key).Select(e => e.Value).ToList(), ct).ConfigureAwait(false);
         }
         catch
         {
+            await failed.CancelAsync().ConfigureAwait(false);
+
+            try
+            {
+                await Task.WhenAll(inFlight).ConfigureAwait(false);
+            }
+            catch
+            {
+                // the first failure is the one rethrown below
+            }
+
             await AbortQuietlyAsync(key, uploadId).ConfigureAwait(false);
             throw;
         }
@@ -230,7 +314,7 @@ internal sealed class S3Client(S3Connection connection, HttpClient http)
                 .ConfigureAwait(false))
             return;
 
-        var (stream, length) = await source.Client.GetAsync(sourceKey, ct).ConfigureAwait(false);
+        var (stream, length) = await source.Client.OpenReadAsync(sourceKey, size, ct).ConfigureAwait(false);
 
         await using (stream)
             await UploadAsync(key, stream, length, progress, ct).ConfigureAwait(false);

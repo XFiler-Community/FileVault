@@ -145,6 +145,14 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
 | `ContainsFileAsync` | Check by name **within the provider's current directory** — do not check a global path. |
 | `ResolveDestinationFileAsync` | Return a placeholder with the correct `FullName`; do **not** create the file on disk. Use the `{baseName} ({index}){ext}` pattern starting at index 2. |
 
+### Parallel transfers
+
+- An HTTP provider whose backend serves ranges reads files through `ParallelDownload.OpenAsync` in its item's
+  `OpenReadAsync` (size from the listing; `EnsurePartialContent` / `EnsureLength` turn a 200 or a changed length into
+  the one-request fallback). Keep the length check: without it a file grown since its listing would be cut silently.
+- A provider that can serve several `CopyFileInAsync` / `OpenReadAsync` at once implements `IParallelTransferProvider`;
+  one connection serving one request at a time (FTP), or writes that must not overlap (GitHub commits) — leave it out.
+
 ### Error handling — non-negotiable
 
 Every `IFileProvider` method wraps its body in `try/catch(Exception ex)` and returns `FileOperationResult<T>.Failure(ex)`. Exceptions **never propagate** from provider methods to callers. Programming errors (null args, wrong state) are the only exception — those throw normally.

@@ -27,10 +27,10 @@ public sealed class WebDavFileItem : IFileItem
     public string Extension => Path.GetExtension(Name);
     public string NameWithoutExtension => Path.GetFileNameWithoutExtension(Name);
 
-    // Streams straight from the server: the consumer's ReadAsync token stops the download mid-file.
+    // Streams from the server (a large file as several ranges at once): the consumer's ReadAsync token stops it mid-file.
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
-        var (stream, length) = await Connection.Client.GetAsync(ServerPath, ct).ConfigureAwait(false);
+        var (stream, length) = await Connection.Client.OpenReadAsync(ServerPath, Size, ct).ConfigureAwait(false);
         return (stream, length ?? Size);
     }
 

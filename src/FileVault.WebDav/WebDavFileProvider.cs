@@ -7,8 +7,12 @@ namespace FileVault.WebDav;
 /// (COPY / MOVE with <c>Overwrite: F</c>); uploads go to a temp name in the destination folder and are moved over the
 /// destination only when complete. WebDAV has no trash: <c>DeleteAsync(toRecycleBin: true)</c> is refused.
 /// </summary>
-public sealed class WebDavFileProvider : IFileProvider, IFolderSizeProvider
+public sealed class WebDavFileProvider : IFileProvider, IFolderSizeProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // Plain HTTP requests, as the folder size walker already runs four listings at once.
+    public int MaxParallelTransfers => 4;
+
     private readonly WebDavConnection _connection;
     private readonly string _path;
 

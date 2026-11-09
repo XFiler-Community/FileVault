@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -297,12 +298,33 @@ public sealed class DropboxClient
     /// The file's content, downloaded completely into a temporary file before it is handed out, so a broken
     /// transfer fails here and never looks like a short file.
     /// </summary>
-    internal async Task<Stream> DownloadAsync(string path, CancellationToken ct) =>
+    /// <remarks>
+    /// A large file of a known <paramref name="size"/> comes as several ranges at once, each of the revision
+    /// <paramref name="rev"/> when it is known, so a file changed meanwhile cannot mix two versions.
+    /// </remarks>
+    internal async Task<Stream> DownloadAsync(string path, CancellationToken ct, long size = 0, string? rev = null) =>
         await TemporaryFileBuffer.CreateAsync(async (destination, token) =>
         {
-            using var response = await Api.DownloadAsync("files/download", new ApiPathArg(path), Json.ApiPathArg, token)
-                .ConfigureAwait(false);
-            await response.Content.CopyToAsync(destination, token).ConfigureAwait(false);
+            var source = await ParallelDownload.OpenAsync(size,
+                async (offset, count, t) =>
+                {
+                    var response = await Api.DownloadAsync("files/download",
+                        new ApiPathArg(rev is null ? path : $"rev:{rev}"), Json.ApiPathArg, t,
+                        new RangeHeaderValue(offset, offset + count - 1)).ConfigureAwait(false);
+
+                    ParallelDownload.EnsurePartialContent(response, offset, count, size);
+                    return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
+                },
+                async t =>
+                {
+                    var response = await Api.DownloadAsync("files/download", new ApiPathArg(path), Json.ApiPathArg, t)
+                        .ConfigureAwait(false);
+                    return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
+                },
+                ct: token).ConfigureAwait(false);
+
+            await using (source.ConfigureAwait(false))
+                await source.CopyToAsync(destination, token).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
 
     /// <summary><c>get_thumbnail_v2</c> in JPEG; null when Dropbox draws no picture of this file.</summary>

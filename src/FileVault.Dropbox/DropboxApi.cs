@@ -117,8 +117,9 @@ internal sealed class DropboxApi(HttpClient http, IDropboxTokenSource tokens, Dr
     }
 
     /// <summary>A download-style call: the response with the content; the caller disposes it.</summary>
+    /// <param name="range">Bytes to ask for (an HTTP Range); null for the whole content.</param>
     public Task<HttpResponseMessage> DownloadAsync<TArg>(string route, TArg arg, JsonTypeInfo<TArg> argType,
-        CancellationToken ct)
+        CancellationToken ct, RangeHeaderValue? range = null)
     {
         var header = EncodeArg(arg, argType);
 
@@ -126,6 +127,7 @@ internal sealed class DropboxApi(HttpClient http, IDropboxTokenSource tokens, Dr
         {
             var request = new HttpRequestMessage(HttpMethod.Post, new Uri(options.ContentBaseUri, route));
             request.Headers.TryAddWithoutValidation(ArgHeader, header);
+            request.Headers.Range = range;
             return request;
         }, HttpCompletionOption.ResponseHeadersRead, ct);
     }
