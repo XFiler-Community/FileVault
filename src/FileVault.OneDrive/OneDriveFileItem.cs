@@ -43,7 +43,7 @@ public sealed class OneDriveFileItem : IThumbnailItem, IPublicLinkItem
     public string NameWithoutExtension => Path.GetFileNameWithoutExtension(_item.Name);
 
     public Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default) =>
-        Client.OpenReadAsync(_item.Id, ct);
+        Client.OpenReadAsync(_item.Id, ct, Size);
 
     /// <summary>To the OneDrive recycle bin.</summary>
     public Task DeleteAsync(CancellationToken ct = default) => Client.MoveToRecycleBinAsync(_item.Id, ct);

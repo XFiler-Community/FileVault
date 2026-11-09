@@ -13,8 +13,12 @@ namespace FileVault.OneDrive;
 /// New folders and new empty files never replace (<c>conflictBehavior=fail</c>).
 /// </remarks>
 public sealed class OneDriveFileProvider(OneDriveClient client, string folderId = OneDriveClient.RootId, string? name = null)
-    : ISearchableFileProvider, IFolderSizeProvider
+    : ISearchableFileProvider, IFolderSizeProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // Each transfer is its own upload session or download URL.
+    public int MaxParallelTransfers => 4;
+
     private const string Replace = "replace";
     private const string Fail = "fail";
 

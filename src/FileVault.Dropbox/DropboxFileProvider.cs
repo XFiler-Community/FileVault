@@ -10,8 +10,12 @@ namespace FileVault.Dropbox;
 /// <c>permanently_delete</c>, which only Dropbox Business apps may use — elsewhere the delete fails.
 /// </summary>
 public sealed class DropboxFileProvider(DropboxClient client, string path = "")
-    : ISearchableFileProvider, IFolderSizeProvider
+    : ISearchableFileProvider, IFolderSizeProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // Dropbox rejects concurrent commits to one namespace (too_many_write_operations) beyond a few.
+    public int MaxParallelTransfers => 2;
+
     public DropboxClient Client => client;
     public string Path => path;
 

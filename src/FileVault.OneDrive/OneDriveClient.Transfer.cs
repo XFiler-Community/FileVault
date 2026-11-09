@@ -16,16 +16,44 @@ public sealed partial class OneDriveClient
     /// The whole content, buffered in a temp file before it is handed out: a transfer that breaks surfaces here and
     /// never looks like a short file to a caller that deletes the source after copying it.
     /// </summary>
-    internal async Task<(Stream stream, long totalBytes)> OpenReadAsync(string id, CancellationToken ct)
+    /// <remarks>A large file of a known <paramref name="size"/> comes as several ranges at once.</remarks>
+    internal async Task<(Stream stream, long totalBytes)> OpenReadAsync(string id, CancellationToken ct, long size = 0)
     {
         var stream = await TemporaryFileBuffer.CreateAsync(async (destination, token) =>
         {
-            using var response = await GetFollowingRedirectAsync($"{ItemPath(id)}/content", token).ConfigureAwait(false);
-            await EnsureSuccessAsync(response, token).ConfigureAwait(false);
-            await response.Content.CopyToAsync(destination, token).ConfigureAwait(false);
+            var source = await ParallelDownload.OpenAsync(size,
+                async (offset, count, t) =>
+                {
+                    var response = await GetContentAsync(id, new RangeHeaderValue(offset, offset + count - 1), t)
+                        .ConfigureAwait(false);
+                    ParallelDownload.EnsurePartialContent(response, offset, count, size);
+                    return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
+                },
+                async t => await ParallelDownload.OpenBodyAsync(
+                    await GetContentAsync(id, null, t).ConfigureAwait(false), t).ConfigureAwait(false),
+                ct: token).ConfigureAwait(false);
+
+            await using (source.ConfigureAwait(false))
+                await source.CopyToAsync(destination, token).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
 
         return (stream, stream.Length);
+    }
+
+    private async Task<HttpResponseMessage> GetContentAsync(string id, RangeHeaderValue? range, CancellationToken ct)
+    {
+        var response = await GetFollowingRedirectAsync($"{ItemPath(id)}/content", ct, range).ConfigureAwait(false);
+
+        try
+        {
+            await EnsureSuccessAsync(response, ct).ConfigureAwait(false);
+            return response;
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
     }
 
     // ── Upload ──────────────────────────────────────────────────────────────

@@ -154,6 +154,44 @@ internal sealed class WebDavClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// The content of a file of <paramref name="size"/> bytes: a large one as several ranges at once when the server
+    /// serves ranges (most do), otherwise one plain GET.
+    /// </summary>
+    public async Task<(Stream Stream, long? Length)> OpenReadAsync(string path, long size, CancellationToken ct)
+    {
+        long? length = size;
+
+        var stream = await ParallelDownload.OpenAsync(size,
+            async (offset, count, token) =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, GetUri(path, collection: false));
+                request.Headers.Range = new RangeHeaderValue(offset, offset + count - 1);
+                var response = await SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+
+                try
+                {
+                    await EnsureSuccessAsync(response, request, path).ConfigureAwait(false);
+                }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
+
+                ParallelDownload.EnsurePartialContent(response, offset, count, size);
+                return await ParallelDownload.OpenBodyAsync(response, token).ConfigureAwait(false);
+            },
+            async token =>
+            {
+                (var whole, length) = await GetAsync(path, token).ConfigureAwait(false);
+                return whole;
+            },
+            ct: ct).ConfigureAwait(false);
+
+        return (stream, length);
+    }
+
     // ── Writing ──────────────────────────────────────────────────────────────
 
     public async Task CreateFolderAsync(string path, CancellationToken ct)

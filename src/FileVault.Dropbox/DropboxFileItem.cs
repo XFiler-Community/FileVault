@@ -33,7 +33,7 @@ public sealed class DropboxFileItem(DropboxClient client, DropboxEntry entry) : 
 
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
-        var stream = await client.DownloadAsync(entry.Path, ct).ConfigureAwait(false);
+        var stream = await client.DownloadAsync(entry.Path, ct, entry.Size, entry.Rev).ConfigureAwait(false);
         return (stream, stream.Length);
     }
 

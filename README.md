@@ -479,6 +479,32 @@ async Task RecursiveCopyAsync(IFolderItem source, IFileProvider dest, string des
 }
 ```
 
+### Parallel transfers
+
+One HTTP connection is often limited on its own (clouds throttle each request, not the account), so FileVault lets
+several work at once:
+
+- **Downloads in ranges.** `OpenReadAsync` of a file of 16 MiB or more reads it as 8 MiB ranges, four at a time, and
+  hands them out in order as one stream (`ParallelDownload`): Yandex Disk, Google Drive, OneDrive, Dropbox, S3 and
+  WebDAV (a WebDAV server without ranges gets one plain GET). A range that comes back short is fetched again, so a
+  broken transfer fails instead of looking like a short file; a file whose length changed since it was listed is read
+  in one request. Memory: about 40 MiB per file being read.
+- **S3 uploads in parallel parts.** A multipart upload sends up to four parts at once.
+- **Several files at once.** `IParallelTransferProvider.MaxParallelTransfers` says how many files a provider can
+  transfer at once; an orchestrator copying many files runs up to the smaller value of the source and the target.
+  Local, Yandex Disk, Google Drive, OneDrive, S3, WebDAV — 4; Dropbox, SFTP — 2; FTP and GitHub (every file is a
+  commit) do not implement it — one at a time.
+
+The ranges help where the backend serves a single connection slower than the line; uploads to Yandex Disk, Google
+Drive, OneDrive and Dropbox stay one stream per file (their protocols take a file's bytes in order) and gain only from
+several files at once.
+
+```csharp
+var parallel = Math.Min(
+    (target as IParallelTransferProvider)?.MaxParallelTransfers ?? 1,
+    (source.CreateProvider() as IParallelTransferProvider)?.MaxParallelTransfers ?? 1);
+```
+
 ### Search and public links (optional capabilities)
 
 Two optional contracts in `FileVault.Core`; check for them with a type test. Both are implemented by the Yandex Disk and Google Drive providers and their file and folder items.

@@ -20,10 +20,40 @@ public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api) 
     public string Extension => Path.GetExtension(resource.Name);
     public string NameWithoutExtension => Path.GetFileNameWithoutExtension(resource.Name);
 
+    // Yandex limits the speed of each download connection, so a large file goes as several ranges at once.
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
         var link = await api.Files.GetDownloadLinkAsync(resource.Path, ct).ConfigureAwait(false);
-        (var stream, long totalBytes) = await api.Files.DownloadFastAsync(link, ct).ConfigureAwait(false);
+        long size = resource.Size;
+        long totalBytes = size;
+
+        var stream = await ParallelDownload.OpenAsync(size,
+            async (offset, count, token) =>
+            {
+                (var range, bool isPartial, long? total) = await api.Files.DownloadRangeAsync(link, offset, count, token)
+                    .ConfigureAwait(false);
+
+                try
+                {
+                    if (!isPartial)
+                        throw new RangeNotSupportedException("Yandex Disk sent the whole file instead of a range.");
+
+                    ParallelDownload.EnsureLength(total, size);
+                    return range;
+                }
+                catch
+                {
+                    await range.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+            },
+            async token =>
+            {
+                (var whole, totalBytes) = await api.Files.DownloadFastAsync(link, token).ConfigureAwait(false);
+                return whole;
+            },
+            ct: ct).ConfigureAwait(false);
+
         return (stream, totalBytes);
     }
 

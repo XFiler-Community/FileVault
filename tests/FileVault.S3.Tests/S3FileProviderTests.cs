@@ -168,6 +168,43 @@ public class S3FileProviderTests
     }
 
     [Test]
+    public async Task Upload_ManyParts_GoInParallel_AndAssembleInOrder()
+    {
+        var connection = _s3.Connect(Bucket, multipartThreshold: 6 * MiB, partSize: 5 * MiB);
+        var data = RandomBytes(42 * MiB + 3);
+        var reports = new List<double>();
+
+        var result = await new S3FileProvider(connection).CopyFileInAsync(new MemoryFileItem("many.bin", data),
+            connection.FullName("many.bin"), new SyncProgress(reports));
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        AssertContent("many.bin", data);
+        Assert.That(_s3.Requests.Count(r => r.Contains("partNumber=")), Is.EqualTo(9));
+        Assert.That(reports, Is.Ordered);
+        Assert.That(reports[^1], Is.EqualTo(1));
+        Assert.That(_s3.OpenUploads, Is.Empty);
+    }
+
+    [Test]
+    public async Task Download_LargeObject_ComesAsRanges()
+    {
+        var data = RandomBytes(40 * MiB + 11);
+        var provider = new S3FileProvider(_s3.Connect(Bucket));
+        _s3.Put(Bucket, "large.bin", data);
+        var item = (await provider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync())
+            .OfType<IFileItem>().Single(i => i.Name == "large.bin");
+
+        var (stream, length) = await item.OpenReadAsync();
+        var copy = new MemoryStream();
+        await using (stream)
+            await stream.CopyToAsync(copy);
+
+        Assert.That(length, Is.EqualTo(data.Length));
+        Assert.That(copy.ToArray(), Is.EqualTo(data));
+        Assert.That(_s3.RangeRequests, Is.EqualTo(6));
+    }
+
+    [Test]
     public async Task Upload_UnknownLength_GoesInParts()
     {
         var connection = _s3.Connect(Bucket, multipartThreshold: 6 * MiB, partSize: 5 * MiB);

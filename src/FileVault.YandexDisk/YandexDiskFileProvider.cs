@@ -7,8 +7,12 @@ using FileVault.Core;
 
 namespace FileVault.YandexDisk;
 
-public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : ISearchableFileProvider, IFolderSizeProvider
+public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : ISearchableFileProvider, IFolderSizeProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // Yandex throttles each upload link, not the account.
+    public int MaxParallelTransfers => 4;
+
     private const int PageSize = 20;
     private const int SearchPageSize = 1000;
     private const int SizesPageSize = 5000;

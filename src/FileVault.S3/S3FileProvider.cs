@@ -7,8 +7,12 @@ namespace FileVault.S3;
 /// object. S3 has no rename or move, so both are a server-side copy and a delete — for a folder, of every key under
 /// it. There is no trash: a delete to the recycle bin is refused.
 /// </summary>
-public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvider
+public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // Objects are independent; S3 serves thousands of requests per prefix.
+    public int MaxParallelTransfers => 4;
+
     private readonly S3Connection _connection;
     private readonly string _path;
 

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
 using FileVault.Core;
 using Google.Apis.Download;
@@ -33,12 +34,41 @@ public sealed partial class GoogleDriveFileItem(DriveFile file, DriveService ser
         var stream = await TemporaryFileBuffer.CreateAsync(
             async (destination, token) =>
             {
-                var download = GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType)
-                    ? await ExportAsync(destination, token).ConfigureAwait(false)
-                    : await service.Files.Get(file.Id).DownloadAsync(destination, token).ConfigureAwait(false);
-                GoogleDriveTransfer.EnsureCompleted(download);
+                if (GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType))
+                {
+                    GoogleDriveTransfer.EnsureCompleted(await ExportAsync(destination, token).ConfigureAwait(false));
+                    return;
+                }
+
+                // A large file comes as several ranges at once: one connection seldom fills the line
+                var source = await ParallelDownload.OpenAsync(Size, DownloadRangeAsync,
+                    async t => await TemporaryFileBuffer.CreateAsync(async (whole, t2) =>
+                        GoogleDriveTransfer.EnsureCompleted(
+                            await service.Files.Get(file.Id).DownloadAsync(whole, t2).ConfigureAwait(false)), t)
+                        .ConfigureAwait(false),
+                    ct: token).ConfigureAwait(false);
+
+                await using (source.ConfigureAwait(false))
+                    await source.CopyToAsync(destination, token).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
         return (stream, stream.Length);
+    }
+
+    private async Task<Stream> DownloadRangeAsync(long offset, int count, CancellationToken ct)
+    {
+        var range = new MemoryStream(count);
+        GoogleDriveTransfer.EnsureCompleted(await service.Files.Get(file.Id)
+            .DownloadRangeAsync(range, new RangeHeaderValue(offset, offset + count - 1), ct).ConfigureAwait(false));
+
+        if (range.Length != count)
+        {
+            throw range.Length == Size
+                ? new RangeNotSupportedException("Google Drive sent the whole file instead of a range.")
+                : new IOException($"Asked Google Drive for {count} bytes from {offset}, got {range.Length}.");
+        }
+
+        range.Position = 0;
+        return range;
     }
 
     private Task<IDownloadProgress> ExportAsync(Stream destination, CancellationToken ct)

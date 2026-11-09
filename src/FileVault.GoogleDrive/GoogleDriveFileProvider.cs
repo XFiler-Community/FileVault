@@ -5,8 +5,12 @@ using DriveFile = Google.Apis.Drive.v3.Data.File;
 namespace FileVault.GoogleDrive;
 
 public sealed class GoogleDriveFileProvider(DriveService service, string folderId)
-    : ISearchableFileProvider, IFolderSizeProvider
+    : ISearchableFileProvider, IFolderSizeProvider, IParallelTransferProvider
 {
+    /// <inheritdoc />
+    // Each request is its own HTTP call; Drive's per-user quota is far above four transfers.
+    public int MaxParallelTransfers => 4;
+
     private const string SizeFields = "nextPageToken, files(id, name, mimeType, size, parents)";
     private const int ParentsPerQuery = 40;
     private const string FolderMimeType = GoogleDriveMimeTypes.Folder;
