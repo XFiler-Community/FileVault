@@ -3,7 +3,7 @@ using FileVault.Core;
 namespace FileVault.S3;
 
 /// <summary>An object of a bucket. <see cref="ChangedDate"/> is S3's LastModified: when the object was last written.</summary>
-public sealed class S3FileItem : IFileItem
+public sealed class S3FileItem : ITemporaryLinkItem
 {
     internal S3FileItem(S3Connection connection, string key, long size, DateTimeOffset changedDate, string? eTag)
     {
@@ -34,6 +34,10 @@ public sealed class S3FileItem : IFileItem
 
     public Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default) =>
         Connection.Client.OpenReadAsync(Key, Size, ct);
+
+    /// <summary>A presigned GET valid for an hour. An endpoint other clouds cannot reach makes their fetch fail.</summary>
+    public Task<Uri?> GetTemporaryLinkAsync(CancellationToken ct = default) =>
+        Task.FromResult<Uri?>(Connection.Client.PresignGet(Key, TimeSpan.FromHours(1)));
 
     public Task DeleteAsync(CancellationToken ct = default) => Connection.Client.DeleteAsync(Key, ct);
 }

@@ -564,6 +564,15 @@ internal sealed class S3Client(S3Connection connection, HttpClient http)
             throw await ErrorAsync(response, method, key, ct).ConfigureAwait(false);
     }
 
+    /// <summary>A presigned GET of <paramref name="key"/>: downloads it without credentials for <paramref name="lifetime"/>.</summary>
+    internal Uri PresignGet(string key, TimeSpan lifetime, DateTime? now = null)
+    {
+        var (url, canonicalUri, host) = Locate(key);
+        var query = S3Signer.PresignedQuery(connection.AccessKeyId, connection.SecretAccessKey, connection.SessionToken,
+            connection.Region, S3Signer.Service, now ?? DateTime.UtcNow, lifetime, "GET", canonicalUri, host);
+        return new Uri($"{url}?{query}", RawUri);
+    }
+
     /// <summary>The URL of a key (empty — the bucket), the same path in canonical form, and the Host it goes to.</summary>
     private (string Url, string CanonicalUri, string Host) Locate(string key)
     {

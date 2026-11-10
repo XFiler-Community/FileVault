@@ -6,7 +6,8 @@ using FileVault.Core;
 
 namespace FileVault.YandexDisk;
 
-public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api) : IThumbnailItem, IPublicLinkItem
+public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api)
+    : IThumbnailItem, IPublicLinkItem, ITemporaryLinkItem
 {
     internal IDiskApi Api => api;
 
@@ -57,11 +58,25 @@ public sealed partial class YandexDiskFileItem(Resource resource, IDiskApi api) 
         return (stream, totalBytes);
     }
 
+    /// <summary>
+    /// The download link Yandex issues for the file. Its documentation asks for the OAuth token on it too; in practice
+    /// it opens without, and a destination that cannot fetch it falls back to streaming (<see cref="UrlTransfer"/>).
+    /// </summary>
+    public async Task<Uri?> GetTemporaryLinkAsync(CancellationToken ct = default)
+    {
+        var link = await api.Files.GetDownloadLinkAsync(resource.Path, ct).ConfigureAwait(false);
+        return Uri.TryCreate(link.Href, UriKind.Absolute, out var uri) ? uri : null;
+    }
+
+    /// <summary>
+    /// To the Yandex Disk trash, not for good: this is how a move to another provider removes its source, and a move
+    /// should leave the file restorable, as Dropbox and OneDrive do.
+    /// </summary>
     public async Task DeleteAsync(CancellationToken ct = default)
     {
         YandexDiskFileProvider.ForgetSizes(api);
         await api.Commands.DeleteAndWaitAsync(
-            new DeleteFileRequest { Path = resource.Path, Permanently = true }, ct).ConfigureAwait(false);
+            new DeleteFileRequest { Path = resource.Path, Permanently = false }, ct).ConfigureAwait(false);
     }
 
     /// <summary>Publishes the file on Yandex Disk; an already published file keeps its link.</summary>

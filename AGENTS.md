@@ -142,6 +142,7 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
 | `MoveFileInAsync` | Same-drive/same-provider → native move. Cross-provider → `CopyFileInAsync` + `sourceItem.DeleteAsync()`. Source path == destination on the same provider → no-op. |
 | `CopyFolderInAsync` | Return `Success(null)` if native folder copy not supported. `null` result is **not an error** — it is the signal for the orchestrator to recurse. FTP always returns `Success(null)`. |
 | `TryMoveFolderAsync` | Return `Success(null)` for cross-provider. Use native API only for same-provider moves. |
+| `IFileItem.DeleteAsync` | How a move to another provider removes its source: to the backend's trash where it has one (Yandex Disk, Google Drive `trashed: true`, Dropbox `delete_v2`, OneDrive recycle bin) — never past it. |
 | `DeleteAsync` | `toRecycleBin: true` → backend trash. No trash → `Failure(NotSupportedException)` before touching any item; **never** silently delete permanently. Local gets its trash via optional `ILocalRecycleBin`. |
 | `ContainsFileAsync` | Check by name **within the provider's current directory** — do not check a global path. |
 | `ResolveDestinationFileAsync` | Return a placeholder with the correct `FullName`; do **not** create the file on disk. Use the `{baseName} ({index}){ext}` pattern starting at index 2. |
@@ -153,6 +154,29 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
   the one-request fallback). Keep the length check: without it a file grown since its listing would be cut silently.
 - A provider that can serve several `CopyFileInAsync` / `OpenReadAsync` at once implements `IParallelTransferProvider`;
   one connection serving one request at a time (FTP), or writes that must not overlap (GitHub commits) — leave it out.
+- A provider whose callers may delete the source after copying (every `OpenReadAsync`) uses
+  `ParallelDownload.OpenCheckedAsync`: ranges are handed out as they arrive (each length-checked, so a copy uploads
+  while it downloads and its progress moves), the whole-file fallback is spooled to a `TemporaryFileBuffer` first, so a
+  body that breaks off fails there instead of looking short. Such a stream cannot seek: return the listed size as
+  `totalBytes`, never `stream.Length`. A download that reports failure instead of throwing (Google's
+  `MediaDownloader`, Drive exports) stays buffered.
+- An upload that needs a length up front takes it from `totalBytes` when the stream cannot seek (OneDrive's session
+  keeps the fragment in hand for a resend) and spools only when the length is unknown.
+
+### Copies between clouds by URL
+
+- `ITemporaryLinkItem.GetTemporaryLinkAsync`: a link that downloads the file without credentials for a while —
+  Yandex Disk's download href, Dropbox `get_temporary_link` (4 h), OneDrive `@microsoft.graph.downloadUrl` (minutes),
+  S3 presigned GET (1 h). Google Drive has none (its downloads need the token), nor do FTP/SFTP/WebDAV/GitHub/Local.
+- A destination that can fetch a URL calls `UrlTransfer.TryAsync` in `CopyFileInAsync` after the same-account branch
+  and before streaming: Yandex Disk (`resources/upload?url=`, an operation polled to the end; 409 if the path exists)
+  and Dropbox (`save_url` job; only into a free path — it would rename otherwise). OneDrive's upload-from-URL is
+  OneDrive personal only and not done; Google Drive has no such API.
+- `UrlTransfer` never makes a copy fail: no link, a file under `MinimumSize` (16 MiB), a plain-http link, a refusal or
+  failure of the destination → `false`, and the provider streams. The destination may save whatever the link answered
+  (an error page), so the size it reports is compared with the source's; a wrong file is discarded (`discard` runs only
+  then — never after a refusal, which may mean an existing file). `FellBack` tells a client why, for its log. Never put
+  the link in an exception message or a log: it opens the file.
 
 ### Error handling — non-negotiable
 

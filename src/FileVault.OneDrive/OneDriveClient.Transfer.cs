@@ -13,31 +13,36 @@ public sealed partial class OneDriveClient
     // ── Download ────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The whole content, buffered in a temp file before it is handed out: a transfer that breaks surfaces here and
-    /// never looks like a short file to a caller that deletes the source after copying it.
+    /// The whole content, never shorter than it is: a large file of a known <paramref name="size"/> as checked ranges
+    /// handed out as they arrive (a copy uploads while it downloads), anything else downloaded completely into a temp
+    /// file first (<see cref="ParallelDownload.OpenCheckedAsync"/>), so a transfer that breaks surfaces here and never
+    /// looks like a short file to a caller that deletes the source after copying it.
     /// </summary>
-    /// <remarks>A large file of a known <paramref name="size"/> comes as several ranges at once.</remarks>
     internal async Task<(Stream stream, long totalBytes)> OpenReadAsync(string id, CancellationToken ct, long size = 0)
     {
-        var stream = await TemporaryFileBuffer.CreateAsync(async (destination, token) =>
-        {
-            var source = await ParallelDownload.OpenAsync(size,
-                async (offset, count, t) =>
-                {
-                    var response = await GetContentAsync(id, new RangeHeaderValue(offset, offset + count - 1), t)
-                        .ConfigureAwait(false);
-                    ParallelDownload.EnsurePartialContent(response, offset, count, size);
-                    return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
-                },
-                async t => await ParallelDownload.OpenBodyAsync(
-                    await GetContentAsync(id, null, t).ConfigureAwait(false), t).ConfigureAwait(false),
-                ct: token).ConfigureAwait(false);
+        var stream = await ParallelDownload.OpenCheckedAsync(size,
+            async (offset, count, t) =>
+            {
+                var response = await GetContentAsync(id, new RangeHeaderValue(offset, offset + count - 1), t)
+                    .ConfigureAwait(false);
+                ParallelDownload.EnsurePartialContent(response, offset, count, size);
+                return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
+            },
+            async t => await ParallelDownload.OpenBodyAsync(
+                await GetContentAsync(id, null, t).ConfigureAwait(false), t).ConfigureAwait(false),
+            ct: ct).ConfigureAwait(false);
 
-            await using (source.ConfigureAwait(false))
-                await source.CopyToAsync(destination, token).ConfigureAwait(false);
-        }, ct).ConfigureAwait(false);
+        return (stream, stream.CanSeek ? stream.Length : size);
+    }
 
-        return (stream, stream.Length);
+    /// <summary>
+    /// The item's <c>@microsoft.graph.downloadUrl</c>: pre-authenticated, valid for a short while (minutes).
+    /// </summary>
+    internal async Task<Uri?> GetDownloadUrlAsync(string id, CancellationToken ct)
+    {
+        var item = await GetJsonAsync($"{ItemPath(id)}?select=id,@microsoft.graph.downloadUrl",
+            OneDriveJsonContext.Default.GraphDownloadUrl, ct).ConfigureAwait(false);
+        return Uri.TryCreate(item.DownloadUrl, UriKind.Absolute, out var url) ? url : null;
     }
 
     private async Task<HttpResponseMessage> GetContentAsync(string id, RangeHeaderValue? range, CancellationToken ct)
@@ -59,7 +64,7 @@ public sealed partial class OneDriveClient
     // ── Upload ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Uploads <paramref name="length"/> bytes from the current position of a seekable <paramref name="content"/> as
+    /// Uploads <paramref name="length"/> bytes from the current position of <paramref name="content"/> (seekable or not) as
     /// <paramref name="name"/> in a folder. Up to <see cref="OneDriveClientOptions.SimpleUploadLimit"/> — one PUT;
     /// larger — an upload session in fragments of <see cref="OneDriveClientOptions.UploadChunkSize"/>. Either way the
     /// file appears only when all bytes arrived, so a failed or cancelled upload leaves the old file as it was.
@@ -67,9 +72,6 @@ public sealed partial class OneDriveClient
     internal async Task<GraphDriveItem> UploadAsync(string parentId, string name, Stream content, long length,
         string conflictBehavior, IProgress<double>? progress, CancellationToken ct)
     {
-        if (!content.CanSeek)
-            throw new ArgumentException("The upload stream must be seekable.", nameof(content));
-
         if (length <= _options.SimpleUploadLimit)
         {
             var bytes = new byte[length];
@@ -96,8 +98,8 @@ public sealed partial class OneDriveClient
 
         try
         {
-            return await UploadFragmentsAsync(uploadUrl, content, content.Position, length, progress, ct)
-                .ConfigureAwait(false);
+            return await UploadFragmentsAsync(uploadUrl, content, content.CanSeek ? content.Position : 0, length,
+                progress, ct).ConfigureAwait(false);
         }
         catch
         {
@@ -106,25 +108,42 @@ public sealed partial class OneDriveClient
         }
     }
 
+    /// <remarks>
+    /// A stream that cannot seek is read forward only: the fragment just read stays in the buffer, so the server may
+    /// ask for (part of) it again, but not for bytes before it.
+    /// </remarks>
     private async Task<GraphDriveItem> UploadFragmentsAsync(Uri uploadUrl, Stream content, long start, long length,
         IProgress<double>? progress, CancellationToken ct)
     {
         var buffer = new byte[Math.Min(_options.UploadChunkSize, length)];
         long offset = 0;
+        long bufferStart = -1;
+        var buffered = 0;
         var resyncs = 0;
 
         while (true)
         {
-            var size = (int)Math.Min(buffer.Length, length - offset);
-            content.Position = start + offset;
-            await content.ReadExactlyAsync(buffer.AsMemory(0, size), ct).ConfigureAwait(false);
+            if (offset < bufferStart || offset >= bufferStart + buffered)
+            {
+                if (content.CanSeek)
+                    content.Position = start + offset;
+                else if (bufferStart >= 0 && offset != bufferStart + buffered)
+                    throw new IOException(
+                        $"The upload session asks for byte {offset}, which a forward-only stream has passed.");
 
+                buffered = (int)Math.Min(buffer.Length, length - offset);
+                await content.ReadExactlyAsync(buffer.AsMemory(0, buffered), ct).ConfigureAwait(false);
+                bufferStart = offset;
+            }
+
+            var skip = (int)(offset - bufferStart);
+            var size = buffered - skip;
             var from = offset;
 
             // The upload URL is pre-authenticated: an Authorization header there can be refused with 401.
             using var response = await SendAsync(() =>
             {
-                var body = OctetStream(buffer, 0, size);
+                var body = OctetStream(buffer, skip, size);
                 body.Headers.ContentRange = new ContentRangeHeaderValue(from, from + size - 1, length);
                 return new HttpRequestMessage(HttpMethod.Put, uploadUrl) { Content = body };
             }, false, true, ct).ConfigureAwait(false);

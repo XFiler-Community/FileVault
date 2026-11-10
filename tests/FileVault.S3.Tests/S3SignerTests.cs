@@ -51,6 +51,20 @@ public class S3SignerTests
     }
 
     [Test]
+    public void S3Example_PresignedUrl()
+    {
+        // "Authenticating Requests: Using Query Parameters": GET examplebucket/test.txt for 86400 s
+        var query = S3Signer.PresignedQuery(S3AccessKey, S3Secret, null, "us-east-1", "s3", S3Date,
+            TimeSpan.FromSeconds(86400), "GET", "/test.txt", "examplebucket.s3.amazonaws.com");
+
+        Assert.That(query, Is.EqualTo(
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+            "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request" +
+            "&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host" +
+            "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"));
+    }
+
+    [Test]
     public void S3Example_PutObject_EncodesTheKey()
     {
         var payloadHash = S3Signer.PayloadHash(Encoding.UTF8.GetBytes("Welcome to Amazon S3."));

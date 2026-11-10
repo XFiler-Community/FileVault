@@ -7,7 +7,8 @@ namespace FileVault.Dropbox;
 /// choice for display), else <c>server_modified</c>. <see cref="DeleteAsync"/> uses <c>delete_v2</c>: the file stays
 /// restorable for the account's retention period.
 /// </summary>
-public sealed class DropboxFileItem(DropboxClient client, DropboxEntry entry) : IThumbnailItem, IPublicLinkItem
+public sealed class DropboxFileItem(DropboxClient client, DropboxEntry entry)
+    : IThumbnailItem, IPublicLinkItem, ITemporaryLinkItem
 {
     // get_thumbnail_v2 draws images (jpg, jpeg, png, tiff, tif, gif, webp, ppm, bmp; up to 20 MB) and, in practice,
     // HEIC photos and common videos; a refused one returns null from OpenThumbnailAsync
@@ -34,8 +35,12 @@ public sealed class DropboxFileItem(DropboxClient client, DropboxEntry entry) : 
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
         var stream = await client.DownloadAsync(entry.Path, ct, entry.Size, entry.Rev).ConfigureAwait(false);
-        return (stream, stream.Length);
+        return (stream, stream.CanSeek ? stream.Length : entry.Size);
     }
+
+    /// <summary><c>files/get_temporary_link</c>: opens without the token for four hours.</summary>
+    public async Task<Uri?> GetTemporaryLinkAsync(CancellationToken ct = default) =>
+        await client.GetTemporaryLinkAsync(entry.Path, ct).ConfigureAwait(false);
 
     public Task DeleteAsync(CancellationToken ct = default) => client.DeleteAsync(entry.Path, ct);
 

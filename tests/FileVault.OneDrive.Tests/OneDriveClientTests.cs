@@ -178,6 +178,50 @@ public class OneDriveClientTests
     }
 
     [Test]
+    public async Task LargeFile_ForwardOnlySource_UploadsAsItIsRead()
+    {
+        // e.g. another cloud's download handed out as it arrives: no temp file before the upload starts
+        const int unit = OneDriveClientOptions.UploadFragmentUnit;
+        var content = Pattern(2 * unit + 1);
+        var provider = ProviderWith(new OneDriveClientOptions { SimpleUploadLimit = 1000, UploadChunkSize = unit });
+        _graph.FragmentFailures.Enqueue(HttpStatusCode.ServiceUnavailable);
+        var reports = new List<double>();
+
+        var result = await provider.CopyFileInAsync(new BytesFileItem("big.bin", content, seekable: false),
+            $"onedrive:{_folderId}/big.bin", new SyncProgress(reports.Add));
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(_graph.Find(_folderId, "big.bin")!.Content.AsSpan().SequenceEqual(content), Is.True);
+        Assert.That(_graph.Fragments, Has.Count.EqualTo(3), "the failed fragment was resent from the buffer");
+        Assert.That(reports[0], Is.GreaterThan(0).And.LessThan(1), "progress moves while the source is read");
+    }
+
+    [Test]
+    public async Task LargeFile_ForwardOnlySourceShorterThanSaid_FailsInsteadOfAShortFile()
+    {
+        const int unit = OneDriveClientOptions.UploadFragmentUnit;
+        var provider = ProviderWith(new OneDriveClientOptions { SimpleUploadLimit = 1000, UploadChunkSize = unit });
+
+        var result = await provider.CopyFileInAsync(
+            new BytesFileItem("big.bin", Pattern(2 * unit), seekable: false, claimedLength: 3 * unit),
+            $"onedrive:{_folderId}/big.bin", new NullProgress());
+
+        Assert.That(result.IsSuccess, Is.False);
+        Assert.That(_graph.Find(_folderId, "big.bin"), Is.Null);
+    }
+
+    [Test]
+    public async Task GetTemporaryLink_IsThePreAuthenticatedDownloadUrl()
+    {
+        _graph.AddFile(_folderId, "a.txt", [1]);
+        var file = (ITemporaryLinkItem)(await _provider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync()).Single();
+
+        var link = await file.GetTemporaryLinkAsync();
+
+        Assert.That(link!.Host, Is.EqualTo("download.fake"));
+    }
+
+    [Test]
     public async Task Upload_ReplacesTakenName_FromNonSeekableSource()
     {
         _graph.AddFile(_folderId, "a.txt", [1]);
@@ -572,7 +616,8 @@ public class OneDriveClientTests
 
     // ── Doubles ─────────────────────────────────────────────────────────────
 
-    private sealed class BytesFileItem(string name, byte[] content, bool seekable = true) : IFileItem
+    private sealed class BytesFileItem(string name, byte[] content, bool seekable = true, long? claimedLength = null)
+        : IFileItem
     {
         public string Name => name;
         public string FullName => $"/elsewhere/{name}";
@@ -586,7 +631,7 @@ public class OneDriveClientTests
 
         public Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default) =>
             Task.FromResult<(Stream, long)>((seekable ? new MemoryStream(content) : new ForwardOnlyStream(content),
-                content.Length));
+                claimedLength ?? content.Length));
 
         public Task DeleteAsync(CancellationToken ct = default) => Task.CompletedTask;
     }

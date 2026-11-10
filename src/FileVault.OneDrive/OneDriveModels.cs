@@ -13,6 +13,10 @@ internal sealed record GraphFileFacet(string? MimeType);
 
 internal sealed record GraphItemReference(string? Id, string? DriveId, string? DriveType, string? Path);
 
+internal sealed record GraphDownloadUrl(
+    string Id,
+    [property: JsonPropertyName("@microsoft.graph.downloadUrl")] string? DownloadUrl);
+
 internal sealed record GraphDriveItem(
     string Id,
     string Name,
@@ -79,6 +83,7 @@ internal sealed record GraphPermissionPage(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(GraphDriveItem))]
+[JsonSerializable(typeof(GraphDownloadUrl))]
 [JsonSerializable(typeof(GraphItemPage))]
 [JsonSerializable(typeof(GraphDrive))]
 [JsonSerializable(typeof(GraphNewFolder))]

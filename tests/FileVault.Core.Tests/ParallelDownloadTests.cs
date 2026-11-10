@@ -52,6 +52,49 @@ public class ParallelDownloadTests
     }
 
     [Test]
+    public async Task Checked_LargeFile_HandsRangesOutAsTheyArrive()
+    {
+        var data = Data(10_500);
+
+        var stream = await ParallelDownload.OpenCheckedAsync(data.Length,
+            (offset, count, _) => Slice(data, offset, count),
+            _ => throw new AssertionException("the whole file must not be asked for"),
+            Small);
+
+        Assert.That(stream.CanSeek, Is.False, "not spooled to a temporary file first");
+        Assert.That(await ReadAllAsync(stream), Is.EqualTo(data));
+    }
+
+    [Test]
+    public async Task Checked_WholeFile_IsBufferedFirst_SoABrokenBodyThrowsHere()
+    {
+        var data = Data(500);
+
+        var stream = await ParallelDownload.OpenCheckedAsync(data.Length,
+            (_, _, _) => throw new AssertionException("a small file is not read in ranges"),
+            _ => Task.FromResult<Stream>(new MemoryStream(data)),
+            Small);
+
+        Assert.That(stream.CanSeek, Is.True);
+        Assert.That(await ReadAllAsync(stream), Is.EqualTo(data));
+
+        Assert.That(async () => await ParallelDownload.OpenCheckedAsync(data.Length,
+                (_, _, _) => throw new AssertionException("a small file is not read in ranges"),
+                _ => Task.FromResult<Stream>(new BreakingStream(data[..100])),
+                Small),
+            Throws.InstanceOf<IOException>());
+    }
+
+    private sealed class BreakingStream(byte[] head) : MemoryStream(head)
+    {
+        public override int Read(byte[] buffer, int offset, int count) =>
+            base.Read(buffer, offset, count) is > 0 and var read ? read : throw new IOException("connection reset");
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) =>
+            await base.ReadAsync(buffer, ct) is > 0 and var read ? read : throw new IOException("connection reset");
+    }
+
+    [Test]
     public async Task ReadsAhead_NoMoreThanParallelismRangesAtOnce()
     {
         var data = Data(20_000);

@@ -104,6 +104,84 @@ public class GoogleDriveTransferTests
     }
 
     [Test]
+    public async Task FileDeleteAsync_TrashesInsteadOfDeleting()
+    {
+        // how a move to another provider removes its source: it must stay restorable
+        HttpRequestMessage? sent = null;
+        string? body = null;
+        using var service = CreateService(request =>
+        {
+            sent = request;
+            body = request.Content?.ReadAsStringAsync().Result;
+            return Json(HttpStatusCode.OK, """{"id":"file-id","name":"a.txt","trashed":true}""");
+        });
+        var item = new GoogleDriveFileItem(new DriveFile { Id = "file-id", Name = "a.txt" }, service);
+
+        await item.DeleteAsync();
+
+        Assert.That(sent!.Method, Is.EqualTo(HttpMethod.Patch));
+        Assert.That(body, Does.Contain("\"trashed\":true"));
+    }
+
+    [Test]
+    public async Task OpenReadAsync_LargeFile_StreamsRangesInsteadOfBufferingFirst()
+    {
+        var content = new byte[20 * 1024 * 1024];
+        new Random(1).NextBytes(content);
+        using var service = CreateService(request => RangeAnswer(request, content, shortAt: null));
+        var item = new GoogleDriveFileItem(new DriveFile
+        {
+            Id = "file-id", Name = "big.bin", MimeType = "application/octet-stream", Size = content.Length
+        }, service);
+
+        var (stream, totalBytes) = await item.OpenReadAsync();
+
+        await using (stream)
+        {
+            // a temporary file would be seekable: this one is read as it downloads
+            Assert.That(stream.CanSeek, Is.False);
+            Assert.That(totalBytes, Is.EqualTo(content.Length));
+
+            using var read = new MemoryStream();
+            await stream.CopyToAsync(read);
+            Assert.That(read.ToArray(), Is.EqualTo(content));
+        }
+    }
+
+    [Test]
+    public async Task OpenReadAsync_LargeFile_ShortRangeThrowsInsteadOfEndingEarly()
+    {
+        var content = new byte[20 * 1024 * 1024];
+        using var service = CreateService(request => RangeAnswer(request, content, shortAt: 8 * 1024 * 1024));
+        var item = new GoogleDriveFileItem(new DriveFile
+        {
+            Id = "file-id", Name = "big.bin", MimeType = "application/octet-stream", Size = content.Length
+        }, service);
+
+        var (stream, _) = await item.OpenReadAsync();
+
+        await using (stream)
+            Assert.That(async () => await stream.CopyToAsync(Stream.Null), Throws.Exception);
+    }
+
+    /// <summary>A 206 of the asked range; the range starting at <paramref name="shortAt"/> comes back one byte short.</summary>
+    private static HttpResponseMessage RangeAnswer(HttpRequestMessage request, byte[] content, long? shortAt)
+    {
+        var range = request.Headers.Range?.Ranges.Single();
+        long from = range?.From ?? 0;
+        long to = Math.Min(range?.To ?? content.Length - 1, content.Length - 1);
+        int count = (int)(to - from + 1) - (from == shortAt ? 1 : 0);
+
+        return new HttpResponseMessage(HttpStatusCode.PartialContent)
+        {
+            Content = new ByteArrayContent(content, (int)from, count)
+            {
+                Headers = { ContentRange = new System.Net.Http.Headers.ContentRangeHeaderValue(from, to, content.Length) }
+            }
+        };
+    }
+
+    [Test]
     public async Task OpenReadAsync_GoogleDoc_ExportsToDocx()
     {
         Uri? requested = null;

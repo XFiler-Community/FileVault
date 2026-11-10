@@ -79,6 +79,32 @@ public static class ParallelDownload
     }
 
     /// <summary>
+    /// <see cref="OpenAsync"/> for a caller that may delete the source after copying it. Ranges are handed out as they
+    /// arrive — each is checked for its length, so the stream never ends early. The whole-file request
+    /// (<paramref name="openWhole"/>: a small file, or a server without ranges) is downloaded into a temporary file
+    /// first, so a body that breaks off surfaces here rather than as a short file. Either way the stream is read
+    /// front to back; take its length from the listing, not from the stream.
+    /// </summary>
+    public static Task<Stream> OpenCheckedAsync(long length,
+        Func<long, int, CancellationToken, Task<Stream>> openRange,
+        Func<CancellationToken, Task<Stream>> openWhole,
+        ParallelDownloadOptions? options = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(openWhole);
+
+        return OpenAsync(length, openRange,
+            async token => await TemporaryFileBuffer.CreateAsync(async (destination, t) =>
+            {
+                var whole = await openWhole(t).ConfigureAwait(false);
+
+                await using (whole.ConfigureAwait(false))
+                    await whole.CopyToAsync(destination, t).ConfigureAwait(false);
+            }, token).ConfigureAwait(false),
+            options, ct);
+    }
+
+    /// <summary>
     /// Checks that an HTTP response carries exactly the range asked for, of a file of <paramref name="length"/> bytes.
     /// A 200, or a 206 of a file of another length (it changed since it was listed), throws
     /// <see cref="RangeNotSupportedException"/>, so the first range falls back to one plain request; a 206 of another

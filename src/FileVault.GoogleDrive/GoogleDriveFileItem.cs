@@ -29,29 +29,29 @@ public sealed partial class GoogleDriveFileItem(DriveFile file, DriveService ser
 
     public async Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
     {
-        // Downloaded completely before it is handed out, so a failed transfer surfaces here and never
-        // looks like a short file to the caller (which may delete the source after copying it).
-        var stream = await TemporaryFileBuffer.CreateAsync(
-            async (destination, token) =>
-            {
-                if (GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType))
-                {
-                    GoogleDriveTransfer.EnsureCompleted(await ExportAsync(destination, token).ConfigureAwait(false));
-                    return;
-                }
+        // A Google Doc is exported, and the export reports a failure instead of throwing: it is downloaded
+        // completely before it is handed out, so a failed transfer never looks like a short file to the caller
+        // (which may delete the source after copying it).
+        if (GoogleDriveMimeTypes.IsWorkspaceType(file.MimeType))
+        {
+            var export = await TemporaryFileBuffer.CreateAsync(async (destination, token) =>
+                GoogleDriveTransfer.EnsureCompleted(await ExportAsync(destination, token).ConfigureAwait(false)),
+                ct).ConfigureAwait(false);
+            return (export, export.Length);
+        }
 
-                // A large file comes as several ranges at once: one connection seldom fills the line
-                var source = await ParallelDownload.OpenAsync(Size, DownloadRangeAsync,
-                    async t => await TemporaryFileBuffer.CreateAsync(async (whole, t2) =>
-                        GoogleDriveTransfer.EnsureCompleted(
-                            await service.Files.Get(file.Id).DownloadAsync(whole, t2).ConfigureAwait(false)), t)
-                        .ConfigureAwait(false),
-                    ct: token).ConfigureAwait(false);
+        // A large file is read as several ranges at once and handed out as they arrive, so a copy uploads while it
+        // downloads and its progress moves from the start. Every range is checked for its length and a broken one
+        // throws, so this stream never ends early either. A small file, or a server that ignores ranges, is
+        // downloaded whole first (the plain download, too, reports a failure instead of throwing).
+        var stream = await ParallelDownload.OpenAsync(Size, DownloadRangeAsync,
+            async t => await TemporaryFileBuffer.CreateAsync(async (whole, t2) =>
+                GoogleDriveTransfer.EnsureCompleted(
+                    await service.Files.Get(file.Id).DownloadAsync(whole, t2).ConfigureAwait(false)), t)
+                .ConfigureAwait(false),
+            ct: ct).ConfigureAwait(false);
 
-                await using (source.ConfigureAwait(false))
-                    await source.CopyToAsync(destination, token).ConfigureAwait(false);
-            }, ct).ConfigureAwait(false);
-        return (stream, stream.Length);
+        return (stream, stream.CanSeek ? stream.Length : Size);
     }
 
     private async Task<Stream> DownloadRangeAsync(long offset, int count, CancellationToken ct)
@@ -127,8 +127,12 @@ public sealed partial class GoogleDriveFileItem(DriveFile file, DriveService ser
         return (stream, stream.Length);
     }
 
+    /// <summary>
+    /// To the Drive trash (<c>trashed: true</c>), not <c>files.delete</c>, which skips it: this is how a move to
+    /// another provider removes its source, and a move should leave the file restorable.
+    /// </summary>
     public async Task DeleteAsync(CancellationToken ct = default)
-        => await service.Files.Delete(file.Id).ExecuteAsync(ct).ConfigureAwait(false);
+        => await service.Files.Update(new DriveFile { Trashed = true }, file.Id).ExecuteAsync(ct).ConfigureAwait(false);
 
     /// <summary>
     /// Shares the file as "anyone with the link" (viewer) and returns its <c>webViewLink</c>; when anyone can open
