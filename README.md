@@ -499,6 +499,25 @@ The ranges help where the backend serves a single connection slower than the lin
 Drive, OneDrive and Dropbox stay one stream per file (their protocols take a file's bytes in order) and gain only from
 several files at once.
 
+A large file is handed out range by range as it arrives (`ParallelDownload.OpenCheckedAsync`), so a copy from one cloud
+to another uploads while it downloads and its progress moves from the start; only a small file, a server without
+ranges and a Google Docs export are downloaded whole into a temporary file first.
+
+### Copies between clouds without this computer
+
+Yandex Disk and Dropbox can download a file from a link by themselves. When the source hands out a temporary link that
+needs no credentials (`ITemporaryLinkItem`: Yandex Disk, Dropbox, OneDrive, S3 presigned URLs), their `CopyFileInAsync`
+asks them to fetch it (`UrlTransfer`) instead of streaming the bytes through your machine. Files under 16 MiB, a
+destination path that already exists, a link the destination cannot reach, or a result of another size fall back to
+streaming, so the copy itself never fails because of it. The destination reports no progress meanwhile.
+
+```csharp
+UrlTransfer.FellBack += (file, reason, error) => logger.LogInformation("{File}: streamed, {Reason}", file, reason);
+UrlTransfer.Enabled = false; // stream every copy
+```
+
+Google Drive neither hands out such links nor fetches them, so a copy to or from it always streams.
+
 ```csharp
 var parallel = Math.Min(
     (target as IParallelTransferProvider)?.MaxParallelTransfers ?? 1,

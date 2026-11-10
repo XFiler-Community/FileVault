@@ -74,6 +74,9 @@ internal sealed class FakeDropbox : HttpMessageHandler
 
     public long Quota { get; set; } = 2L * 1024 * 1024 * 1024;
 
+    /// <summary>What <c>save_url</c> downloads from a URL; null — the download fails (<c>download_failed</c>).</summary>
+    public Func<string, byte[]?> UrlContent { get; set; } = _ => null;
+
     /// <summary>Every call: route (<c>files/upload</c>, <c>oauth2/token</c>), the raw <c>Dropbox-API-Arg</c>, body length, token.</summary>
     public List<(string Route, string? Arg, long BodyLength, string? Token)> Requests { get; } = [];
 
@@ -251,6 +254,9 @@ internal sealed class FakeDropbox : HttpMessageHandler
         "files/upload_session/append_v2" => AppendSession(input!["cursor"]!, body),
         "files/upload_session/finish" => FinishSession(input!, body),
         "files/download" => Download(Path(input, "path")),
+        "files/get_temporary_link" => TemporaryLink(Path(input, "path")),
+        "files/save_url" => SaveUrl(Path(input, "path"), Str(input, "url")),
+        "files/save_url/check_job_status" => CheckJob(Str(input, "async_job_id")),
         "files/get_thumbnail_v2" => Thumbnail(input!),
         "files/search_v2" => Search(input!),
         "files/search/continue_v2" => SearchPage(Str(input, "cursor")),
@@ -426,6 +432,40 @@ internal sealed class FakeDropbox : HttpMessageHandler
             return Ok(new JsonObject { [".tag"] = "in_progress" });
 
         return Ok(job.Result.DeepClone());
+    }
+
+    private HttpResponseMessage TemporaryLink(string path)
+    {
+        var node = Lookup(path, "path");
+        return Ok(new JsonObject { ["metadata"] = Metadata(node, withTag: false), ["link"] = $"https://dl.fake.dropbox/{node.Id}" });
+    }
+
+    /// <summary>Like Dropbox: a job; a taken name gets " (1)".</summary>
+    private HttpResponseMessage SaveUrl(string path, string url)
+    {
+        var id = $"job-{NextId()}";
+        JsonNode result;
+
+        if (UrlContent(url) is { } content)
+        {
+            var free = path;
+
+            for (var i = 1; _nodes.ContainsKey(free); i++)
+                free = $"{Parent(path)}/{System.IO.Path.GetFileNameWithoutExtension(path)} ({i}){System.IO.Path.GetExtension(path)}";
+
+            EnsureParents(free);
+            var node = _nodes[free] = new Node(free, false, content, NextId(), Tick());
+            var metadata = Metadata(node, withTag: false);
+            metadata[".tag"] = "complete";
+            result = metadata;
+        }
+        else
+        {
+            result = new JsonObject { [".tag"] = "failed", ["failed"] = Tagged("download_failed") };
+        }
+
+        _jobs[id] = new Job(result, JobPolls);
+        return Ok(new JsonObject { [".tag"] = "async_job_id", ["async_job_id"] = id });
     }
 
     private JsonObject Commit(JsonNode commit, byte[] content)

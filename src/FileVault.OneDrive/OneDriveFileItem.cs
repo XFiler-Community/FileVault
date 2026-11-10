@@ -7,7 +7,7 @@ namespace FileVault.OneDrive;
 /// Office documents and PDFs): Graph cannot list thumbnails with children on work/school drives, so a guessed picture
 /// may still turn out missing — <see cref="OpenThumbnailAsync"/> then returns null.
 /// </summary>
-public sealed class OneDriveFileItem : IThumbnailItem, IPublicLinkItem
+public sealed class OneDriveFileItem : IThumbnailItem, IPublicLinkItem, ITemporaryLinkItem
 {
     private static readonly HashSet<string> DocumentExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -44,6 +44,9 @@ public sealed class OneDriveFileItem : IThumbnailItem, IPublicLinkItem
 
     public Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default) =>
         Client.OpenReadAsync(_item.Id, ct, Size);
+
+    /// <summary>The pre-authenticated <c>@microsoft.graph.downloadUrl</c>; it expires within minutes.</summary>
+    public Task<Uri?> GetTemporaryLinkAsync(CancellationToken ct = default) => Client.GetDownloadUrlAsync(_item.Id, ct);
 
     /// <summary>To the OneDrive recycle bin.</summary>
     public Task DeleteAsync(CancellationToken ct = default) => Client.MoveToRecycleBinAsync(_item.Id, ct);

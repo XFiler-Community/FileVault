@@ -25,6 +25,104 @@ public class DropboxProviderTests
     [TearDown]
     public void TearDown() => _dropbox.Dispose();
 
+    // ── Copies by URL (another cloud's temporary link) ──────────────────────
+
+    private static readonly byte[] Large = Enumerable.Range(0, 20 * 1024 * 1024).Select(i => (byte)i).ToArray();
+
+    [Test]
+    public async Task CopyFileIn_SourceWithLink_DropboxSavesTheUrlItself()
+    {
+        _dropbox.UrlContent = url => url == "https://dl.other.cloud/film?sig=1" ? Large : null;
+        var provider = _client.CreateProvider();
+        var source = new LinkedFile("film.mp4", Large, "https://dl.other.cloud/film?sig=1");
+
+        var result = await provider.CopyFileInAsync(source, "dropbox:/film.mp4", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(source.Opened, Is.False, "nothing goes through this computer");
+        Assert.That(_dropbox.Requests.Select(r => r.Route), Does.Contain("files/save_url"));
+        Assert.That(_dropbox.Requests.Select(r => r.Route), Has.None.StartsWith("files/upload"));
+        Assert.That(result.Result!.Size, Is.EqualTo(Large.Length));
+    }
+
+    [Test]
+    public async Task CopyFileIn_SaveUrlFails_Streams()
+    {
+        var provider = _client.CreateProvider();
+        var source = new LinkedFile("film.mp4", Large, "https://dl.other.cloud/film");
+
+        var result = await provider.CopyFileInAsync(source, "dropbox:/film.mp4", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(source.Opened, Is.True);
+        Assert.That(_dropbox.Read("/film.mp4"), Is.EqualTo(Large));
+    }
+
+    [Test]
+    public async Task CopyFileIn_SavedFileOfAnotherSize_IsRemovedAndStreamed()
+    {
+        _dropbox.UrlContent = _ => "<html>link expired</html>"u8.ToArray();
+        var provider = _client.CreateProvider();
+        var source = new LinkedFile("film.mp4", Large, "https://dl.other.cloud/film");
+
+        var result = await provider.CopyFileInAsync(source, "dropbox:/film.mp4", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(_dropbox.Read("/film.mp4"), Is.EqualTo(Large));
+        Assert.That(_dropbox.DeletedPaths, Does.Contain("/film.mp4"));
+    }
+
+    [Test]
+    public async Task CopyFileIn_ReplacingAFile_StreamsWithoutSaveUrl()
+    {
+        _dropbox.AddFile("/film.mp4", "old");
+        _dropbox.UrlContent = _ => Large;
+        var provider = _client.CreateProvider();
+        var source = new LinkedFile("film.mp4", Large, "https://dl.other.cloud/film");
+
+        var result = await provider.CopyFileInAsync(source, "dropbox:/film.mp4", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(_dropbox.Requests.Select(r => r.Route), Has.None.EqualTo("files/save_url"));
+        Assert.That(_dropbox.Read("/film.mp4"), Is.EqualTo(Large));
+    }
+
+    [Test]
+    public async Task GetTemporaryLink_IsDropboxsTemporaryLink()
+    {
+        _dropbox.AddFile("/a.txt", "a");
+        var provider = _client.CreateProvider();
+        var file = (ITemporaryLinkItem)(await provider.GetItemsAsync(FileProviderFilter.ShowAll).ToListAsync()).Single();
+
+        var link = await file.GetTemporaryLinkAsync();
+
+        Assert.That(link!.AbsoluteUri, Does.StartWith("https://dl.fake.dropbox/"));
+    }
+
+    private sealed class LinkedFile(string name, byte[] content, string link) : ITemporaryLinkItem
+    {
+        public bool Opened { get; private set; }
+        public string Name => name;
+        public string FullName => $"other:{name}";
+        public bool IsHidden => false;
+        public bool IsSystem => false;
+        public DateTimeOffset ChangedDate => DateTimeOffset.Now;
+        long? IFileProviderItem.Size => content.Length;
+        public long Size => content.Length;
+        public string Extension => System.IO.Path.GetExtension(name);
+        public string NameWithoutExtension => System.IO.Path.GetFileNameWithoutExtension(name);
+
+        public Task<Uri?> GetTemporaryLinkAsync(CancellationToken ct = default) => Task.FromResult<Uri?>(new Uri(link));
+
+        public Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
+        {
+            Opened = true;
+            return Task.FromResult<(Stream, long)>((new MemoryStream(content), content.Length));
+        }
+
+        public Task DeleteAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     // ── Listing ─────────────────────────────────────────────────────────────
 
     [Test]

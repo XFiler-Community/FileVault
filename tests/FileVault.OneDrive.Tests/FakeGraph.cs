@@ -408,6 +408,9 @@ internal sealed class FakeGraph : HttpMessageHandler
             ["lastModifiedDateTime"] = node.Modified.ToString("O")
         };
 
+        if (!node.IsFolder)
+            json["@microsoft.graph.downloadUrl"] = $"https://download.fake/{node.Id}?tempauth=1";
+
         if (node.ParentId is { } parentId)
         {
             var parentReference = new JsonObject { ["id"] = parentId, ["driveId"] = DriveId, ["driveType"] = DriveType };

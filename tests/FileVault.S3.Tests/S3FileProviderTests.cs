@@ -383,6 +383,24 @@ public class S3FileProviderTests
     }
 
     [Test]
+    public async Task TemporaryLink_IsAPresignedGetOfTheKey()
+    {
+        var connection = new S3Connection
+        {
+            Endpoint = new Uri("https://s3.eu-central-1.amazonaws.com"), Bucket = "photos", Region = "eu-central-1",
+            AccessKeyId = "AKID", SecretAccessKey = "secret", SessionToken = "session"
+        };
+        var file = new S3FileItem(connection, "2026/a b+c.jpg", 10, DateTimeOffset.Now, null);
+
+        var link = await file.GetTemporaryLinkAsync();
+
+        Assert.That(link!.AbsoluteUri, Does.StartWith("https://photos.s3.eu-central-1.amazonaws.com/2026/a%20b%2Bc.jpg?"));
+        Assert.That(link.Query, Does.Contain("X-Amz-Expires=3600"));
+        Assert.That(link.Query, Does.Contain("X-Amz-Security-Token=session"));
+        Assert.That(link.Query, Does.Contain("X-Amz-Signature="));
+    }
+
+    [Test]
     public async Task CopyFolder_FromElsewhere_AsksToRecurse()
     {
         var provider = new S3FileProvider(_s3.Connect(Bucket));

@@ -200,6 +200,12 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
                 return FileOperationResult<IFileItem>.Success(new DropboxFileItem(client, entry));
             }
 
+            if (await FetchByLinkAsync(sourceItem, destination, ct).ConfigureAwait(false) is { } fetched)
+            {
+                progress.Report(1);
+                return FileOperationResult<IFileItem>.Success(new DropboxFileItem(client, fetched));
+            }
+
             (var source, long length) = await sourceItem.OpenReadAsync(ct).ConfigureAwait(false);
 
             await using (source)
@@ -214,6 +220,39 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
         {
             return FileOperationResult<IFileItem>.Failure(ex);
         }
+    }
+
+    /// <summary>
+    /// Another cloud's file with a temporary link: Dropbox downloads it by itself (<c>files/save_url</c>), so it never
+    /// passes through this computer. Only into a free path — save_url does not overwrite, so a replace streams. Null:
+    /// stream it.
+    /// </summary>
+    private async Task<DropboxEntry?> FetchByLinkAsync(IFileItem sourceItem, string destination, CancellationToken ct)
+    {
+        if (sourceItem is not ITemporaryLinkItem || !UrlTransfer.Enabled || sourceItem.Size < UrlTransfer.MinimumSize
+            || await client.GetEntryAsync(destination, ct).ConfigureAwait(false) is not null)
+            return null;
+
+        DropboxEntry? saved = null;
+
+        var done = await UrlTransfer.TryAsync(sourceItem,
+            async (link, token) =>
+            {
+                saved = await client.SaveUrlAsync(destination, link.AbsoluteUri, token).ConfigureAwait(false);
+
+                if (!string.Equals(saved.PathLower, destination, StringComparison.OrdinalIgnoreCase))
+                {
+                    // something took the name meanwhile and Dropbox renamed the new file: not what was asked for
+                    await client.DeleteAsync(saved.Path, token).ConfigureAwait(false);
+                    throw new IOException($"Dropbox saved the file as '{saved.Path}' instead of '{destination}'.");
+                }
+
+                return saved.Size;
+            },
+            token => client.DeleteAsync(destination, token),
+            ct).ConfigureAwait(false);
+
+        return done ? saved : null;
     }
 
     public async Task<FileOperationResult<IFileItem>> MoveFileInAsync(IFileItem sourceItem, string destinationPath,

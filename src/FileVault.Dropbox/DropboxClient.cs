@@ -194,6 +194,56 @@ public sealed class DropboxClient
     }
 
     /// <summary>
+    /// <c>files/get_temporary_link</c>: a link that downloads the file without the token for four hours.
+    /// </summary>
+    internal async Task<Uri> GetTemporaryLinkAsync(string path, CancellationToken ct)
+    {
+        var result = await Api.RpcAsync("files/get_temporary_link", new ApiPathArg(path), Json.ApiPathArg,
+            Json.ApiTemporaryLink, ct).ConfigureAwait(false);
+        return new Uri(result.Link);
+    }
+
+    /// <summary>
+    /// <c>files/save_url</c>: Dropbox downloads <paramref name="url"/> into <paramref name="path"/> by itself, as a job
+    /// polled until it ends. Dropbox gives the download a few minutes; a slower one fails the job. An existing path is
+    /// not overwritten (Dropbox may save under another name — check the returned entry's path).
+    /// </summary>
+    internal async Task<DropboxEntry> SaveUrlAsync(string path, string url, CancellationToken ct)
+    {
+        var status = await Api.RpcAsync("files/save_url", new ApiSaveUrlArg(path, url), Json.ApiSaveUrlArg,
+            Json.ApiSaveUrlStatus, ct).ConfigureAwait(false);
+
+        var jobId = status.AsyncJobId;
+        var deadline = DateTimeOffset.UtcNow + Options.JobTimeout;
+
+        while (status.Tag is "async_job_id" or "in_progress")
+        {
+            if (jobId is null)
+                throw new DropboxApiException(HttpStatusCode.OK, null, "Dropbox started a save_url job without an id.");
+
+            if (DateTimeOffset.UtcNow > deadline)
+                throw new TimeoutException($"Dropbox did not finish saving '{path}' in {Options.JobTimeout}.");
+
+            await Task.Delay(Options.JobPollInterval, ct).ConfigureAwait(false);
+
+            status = await Api.RpcAsync("files/save_url/check_job_status", new ApiAsyncJobArg(jobId),
+                Json.ApiAsyncJobArg, Json.ApiSaveUrlStatus, ct).ConfigureAwait(false);
+        }
+
+        if (status.Tag != "complete")
+        {
+            // never the URL in the message: it opens the file
+            var summary = status.Failed is { } failed ? TagPath(failed) : status.Tag;
+            throw new DropboxApiException(HttpStatusCode.Conflict, summary,
+                $"Dropbox could not save the file to '{path}': {summary}.");
+        }
+
+        return ToEntry(new ApiMetadata(null, status.Name ?? System.IO.Path.GetFileName(path), status.PathLower,
+            status.PathDisplay, status.Id, status.ClientModified, status.ServerModified, status.Rev, status.Size,
+            status.ContentHash), path);
+    }
+
+    /// <summary>
     /// Uploads <paramref name="source"/> to <paramref name="path"/>. A seekable source up to
     /// <see cref="DropboxClientOptions.SimpleUploadLimit"/> goes in one <c>files/upload</c> (rewound when a retry
     /// sends it again); anything else through an upload session in chunks of
@@ -295,37 +345,32 @@ public sealed class DropboxClient
     // ── Reads ────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The file's content, downloaded completely into a temporary file before it is handed out, so a broken
-    /// transfer fails here and never looks like a short file.
+    /// The file's content, never shorter than it is: a large file as checked ranges handed out as they arrive (a copy
+    /// uploads while it downloads), a small one downloaded completely into a temporary file first
+    /// (<see cref="ParallelDownload.OpenCheckedAsync"/>). Read front to back; the length is the listed size.
     /// </summary>
     /// <remarks>
     /// A large file of a known <paramref name="size"/> comes as several ranges at once, each of the revision
     /// <paramref name="rev"/> when it is known, so a file changed meanwhile cannot mix two versions.
     /// </remarks>
-    internal async Task<Stream> DownloadAsync(string path, CancellationToken ct, long size = 0, string? rev = null) =>
-        await TemporaryFileBuffer.CreateAsync(async (destination, token) =>
-        {
-            var source = await ParallelDownload.OpenAsync(size,
-                async (offset, count, t) =>
-                {
-                    var response = await Api.DownloadAsync("files/download",
-                        new ApiPathArg(rev is null ? path : $"rev:{rev}"), Json.ApiPathArg, t,
-                        new RangeHeaderValue(offset, offset + count - 1)).ConfigureAwait(false);
+    internal Task<Stream> DownloadAsync(string path, CancellationToken ct, long size = 0, string? rev = null) =>
+        ParallelDownload.OpenCheckedAsync(size,
+            async (offset, count, t) =>
+            {
+                var response = await Api.DownloadAsync("files/download",
+                    new ApiPathArg(rev is null ? path : $"rev:{rev}"), Json.ApiPathArg, t,
+                    new RangeHeaderValue(offset, offset + count - 1)).ConfigureAwait(false);
 
-                    ParallelDownload.EnsurePartialContent(response, offset, count, size);
-                    return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
-                },
-                async t =>
-                {
-                    var response = await Api.DownloadAsync("files/download", new ApiPathArg(path), Json.ApiPathArg, t)
-                        .ConfigureAwait(false);
-                    return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
-                },
-                ct: token).ConfigureAwait(false);
-
-            await using (source.ConfigureAwait(false))
-                await source.CopyToAsync(destination, token).ConfigureAwait(false);
-        }, ct).ConfigureAwait(false);
+                ParallelDownload.EnsurePartialContent(response, offset, count, size);
+                return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
+            },
+            async t =>
+            {
+                var response = await Api.DownloadAsync("files/download", new ApiPathArg(path), Json.ApiPathArg, t)
+                    .ConfigureAwait(false);
+                return await ParallelDownload.OpenBodyAsync(response, t).ConfigureAwait(false);
+            },
+            ct: ct);
 
     /// <summary><c>get_thumbnail_v2</c> in JPEG; null when Dropbox draws no picture of this file.</summary>
     internal async Task<Stream?> GetThumbnailAsync(string path, int size, CancellationToken ct)

@@ -345,6 +345,10 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
                     .ConfigureAwait(false);
                 progress.Report(1.0);
             }
+            else if (await FetchByLinkAsync(sourceItem, destinationPath, ct).ConfigureAwait(false))
+            {
+                progress.Report(1.0);
+            }
             else
             {
                 (var src, long len) = await sourceItem.OpenReadAsync(ct).ConfigureAwait(false);
@@ -362,6 +366,29 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
             return FileOperationResult<IFileItem>.Failure(ex);
         }
     }
+
+    /// <summary>
+    /// Another cloud's file with a temporary link: Yandex downloads it by itself (<c>resources/upload?url=</c>), so it
+    /// never passes through this computer (whether the upload speed limit some file types get applies to it too is
+    /// not measured). A path that exists already is refused (no overwrite by URL), so a replace streams.
+    /// </summary>
+    private Task<bool> FetchByLinkAsync(IFileItem sourceItem, string destinationPath, CancellationToken ct) =>
+        UrlTransfer.TryAsync(sourceItem,
+            async (link, token) =>
+            {
+                var operation = await api.Files.UploadFromUrlAsync(destinationPath, link.AbsoluteUri,
+                    cancellationToken: token).ConfigureAwait(false);
+
+                if (operation.HttpStatusCode == HttpStatusCode.Accepted)
+                    await api.Commands.WaitForOperationAsync(operation, token).ConfigureAwait(false);
+
+                var uploaded = await api.MetaInfo.GetInfoAsync(new ResourceRequest { Path = destinationPath }, token)
+                    .ConfigureAwait(false);
+                return uploaded.Size;
+            },
+            token => api.Commands.DeleteAndWaitAsync(
+                new DeleteFileRequest { Path = destinationPath, Permanently = true }, token),
+            ct);
 
     public async Task<FileOperationResult<IFileItem>> MoveFileInAsync(IFileItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)

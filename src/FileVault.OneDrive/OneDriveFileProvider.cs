@@ -351,7 +351,7 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
     private async Task<GraphDriveItem> UploadFromAsync(IFileItem source, string parentId, string fileName,
         IProgress<double> progress, CancellationToken ct)
     {
-        var (stream, _) = await source.OpenReadAsync(ct).ConfigureAwait(false);
+        var (stream, totalBytes) = await source.OpenReadAsync(ct).ConfigureAwait(false);
 
         await using (stream)
         {
@@ -359,7 +359,13 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
                 return await client.UploadAsync(parentId, fileName, stream, stream.Length - stream.Position, Replace,
                     progress, ct).ConfigureAwait(false);
 
-            // An upload session needs the length up front and a way to resend a fragment: spool to a temp file
+            // A forward-only stream of a known length uploads as it is read (the session keeps the fragment in hand
+            // for a resend); a stream shorter than it said fails the upload rather than leaving a short file
+            if (totalBytes > 0)
+                return await client.UploadAsync(parentId, fileName, stream, totalBytes, Replace, progress, ct)
+                    .ConfigureAwait(false);
+
+            // Without a length an upload session cannot start: spool to a temp file
             await using var buffered = await TemporaryFileBuffer.CreateAsync(
                 (destination, token) => stream.CopyToAsync(destination, token), ct).ConfigureAwait(false);
 

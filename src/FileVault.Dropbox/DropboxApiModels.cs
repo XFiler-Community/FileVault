@@ -54,6 +54,28 @@ internal sealed record ApiRelocationBatchStatus(
     string? AsyncJobId,
     List<ApiRelocationBatchEntry>? Entries);
 
+internal sealed record ApiSaveUrlArg(string Path, string Url);
+
+/// <summary>
+/// SaveUrlResult / SaveUrlJobStatus: <c>async_job_id</c> · <c>in_progress</c> · <c>complete</c> (a FileMetadata,
+/// inlined next to the tag) · <c>failed</c> (a SaveUrlError union).
+/// </summary>
+internal sealed record ApiSaveUrlStatus(
+    [property: JsonPropertyName(".tag")] string Tag,
+    string? AsyncJobId,
+    string? Name,
+    string? PathLower,
+    string? PathDisplay,
+    string? Id,
+    DateTimeOffset? ClientModified,
+    DateTimeOffset? ServerModified,
+    string? Rev,
+    long? Size,
+    string? ContentHash,
+    JsonElement? Failed);
+
+internal sealed record ApiTemporaryLink(string Link);
+
 internal sealed record ApiCommitInfo(string Path, string Mode, bool Autorename, bool Mute);
 
 internal sealed record ApiUploadSessionStartArg(bool Close);
@@ -129,6 +151,9 @@ internal sealed record ApiOAuthError(string? Error, string? ErrorDescription);
 [JsonSerializable(typeof(ApiRelocationBatchArg))]
 [JsonSerializable(typeof(ApiAsyncJobArg))]
 [JsonSerializable(typeof(ApiRelocationBatchStatus))]
+[JsonSerializable(typeof(ApiSaveUrlArg))]
+[JsonSerializable(typeof(ApiSaveUrlStatus))]
+[JsonSerializable(typeof(ApiTemporaryLink))]
 [JsonSerializable(typeof(ApiCommitInfo))]
 [JsonSerializable(typeof(ApiUploadSessionStartArg))]
 [JsonSerializable(typeof(ApiUploadSessionStartResult))]

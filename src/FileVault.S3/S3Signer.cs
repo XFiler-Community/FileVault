@@ -107,6 +107,35 @@ internal static class S3Signer
         return $"{Algorithm} Credential={accessKeyId}/{scope}, SignedHeaders={signedHeaders}, Signature={signature}";
     }
 
+    /// <summary>
+    /// The query of a presigned URL (signature in the query, only <c>host</c> signed, the payload unsigned): whoever
+    /// has the URL may send <paramref name="method"/> to <paramref name="canonicalUri"/> until it expires.
+    /// </summary>
+    public static string PresignedQuery(string accessKeyId, string secretAccessKey, string? sessionToken, string region,
+        string service, DateTime utc, TimeSpan lifetime, string method, string canonicalUri, string host)
+    {
+        var scope = Scope(utc, region, service);
+        var query = new List<KeyValuePair<string, string>>
+        {
+            new("X-Amz-Algorithm", Algorithm),
+            new("X-Amz-Credential", $"{accessKeyId}/{scope}"),
+            new("X-Amz-Date", AmzDate(utc)),
+            new("X-Amz-Expires", ((long)lifetime.TotalSeconds).ToString(CultureInfo.InvariantCulture)),
+            new("X-Amz-SignedHeaders", "host")
+        };
+
+        if (sessionToken is not null)
+            query.Add(new("X-Amz-Security-Token", sessionToken));
+
+        var canonicalQuery = CanonicalQuery(query);
+        var canonicalRequest = CanonicalRequest(method, canonicalUri, canonicalQuery, [new("host", host)],
+            UnsignedPayload, out _);
+        var key = SigningKey(secretAccessKey, utc.ToString("yyyyMMdd", CultureInfo.InvariantCulture), region, service);
+        var signature = Hex(HmacSha256(key, StringToSign(utc, scope, canonicalRequest)));
+
+        return $"{canonicalQuery}&X-Amz-Signature={signature}";
+    }
+
     public static string PayloadHash(ReadOnlySpan<byte> payload) => Hex(SHA256.HashData(payload));
 
     public static string Hex(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(bytes);

@@ -12,6 +12,90 @@ namespace FileVault.YandexDisk.Tests;
 [TestFixture]
 public class YandexDiskFileProviderTests
 {
+    private const long LargeSize = 32L * 1024 * 1024;
+
+    [Test]
+    public async Task CopyFileInAsync_OtherCloudWithLink_YandexFetchesItWithoutStreaming()
+    {
+        var api = new FakeDiskApi { GetInfo = r => FileResource(r.Path, LargeSize) };
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+        var source = new LinkedFileItem("film.mp4", LargeSize, new Uri("https://dl.other.cloud/film?sig=1"));
+
+        var result = await provider.CopyFileInAsync(source, "disk:/Docs/film.mp4", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(api.UrlUploads, Is.EqualTo(new[] { ("disk:/Docs/film.mp4", "https://dl.other.cloud/film?sig=1") }));
+        Assert.That(api.Uploads, Is.Empty, "nothing goes through this computer");
+        Assert.That(source.Opened, Is.False);
+    }
+
+    [Test]
+    public async Task CopyFileInAsync_FetchedFileOfAnotherSize_IsRemovedAndStreamed()
+    {
+        // e.g. the link answered an error page and Yandex saved that
+        var api = new FakeDiskApi { GetInfo = r => FileResource(r.Path, 1234) };
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+        var source = new LinkedFileItem("film.mp4", LargeSize, new Uri("https://dl.other.cloud/film"));
+
+        var result = await provider.CopyFileInAsync(source, "disk:/Docs/film.mp4", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(api.Deletes, Is.EqualTo(new[] { "disk:/Docs/film.mp4" }));
+        Assert.That(api.Uploads.Select(u => u.Path), Is.EqualTo(new[] { "disk:/Docs/film.mp4" }));
+    }
+
+    [Test]
+    public async Task CopyFileInAsync_UrlUploadRefused_StreamsAndDeletesNothing()
+    {
+        // 409: the file exists and the user chose to replace it — there is no overwrite by URL
+        var api = new FakeDiskApi { UploadFromUrl = (_, _) => throw ApiError(HttpStatusCode.Conflict) };
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+        var source = new LinkedFileItem("film.mp4", LargeSize, new Uri("https://dl.other.cloud/film"));
+
+        var result = await provider.CopyFileInAsync(source, "disk:/Docs/film.mp4", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(api.Deletes, Is.Empty);
+        Assert.That(api.Uploads, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task CopyFileInAsync_SmallFileWithLink_IsStreamed()
+    {
+        var api = new FakeDiskApi();
+        var provider = new YandexDiskFileProvider(api, "disk:/Docs");
+        var source = new LinkedFileItem("note.txt", 100, new Uri("https://dl.other.cloud/note"));
+
+        var result = await provider.CopyFileInAsync(source, "disk:/Docs/note.txt", new Progress<double>());
+
+        Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
+        Assert.That(api.UrlUploads, Is.Empty);
+        Assert.That(api.Uploads, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task FileDeleteAsync_GoesToTheTrash()
+    {
+        // how a move to another provider removes its source: it must stay restorable
+        var api = new FakeDiskApi();
+        var item = new YandexDiskFileItem(FileResource("disk:/a.bin", 10), api);
+
+        await item.DeleteAsync();
+
+        Assert.That(api.DeletesPermanently, Is.EqualTo(new[] { false }));
+    }
+
+    [Test]
+    public async Task GetTemporaryLinkAsync_IsTheDownloadLink()
+    {
+        var api = new FakeDiskApi();
+        var item = new YandexDiskFileItem(FileResource("disk:/a.bin", 10), api);
+
+        // the fake answers the path as the href
+        Assert.That(await item.GetTemporaryLinkAsync(), Is.EqualTo(new Uri("disk:/a.bin")));
+        Assert.That(api.Downloads, Is.EqualTo(new[] { "disk:/a.bin" }));
+    }
+
     [Test]
     public async Task ContainsFileAsync_NotFound_ReturnsFalse()
     {
@@ -648,14 +732,28 @@ public class YandexDiskFileProviderTests
             return Done();
         }
 
+        public List<bool> DeletesPermanently { get; } = [];
+
         public async Task<Link?> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default)
         {
             Deletes.Add(request.Path);
+            DeletesPermanently.Add(request.Permanently);
             return await Done();
         }
 
         public Task<Operation> GetOperationStatusAsync(Link link, CancellationToken cancellationToken = default)
             => Task.FromResult(new Operation { Status = AsyncOperationStatus ?? OperationStatus.Success });
+
+        public Func<string, string, Link>? UploadFromUrl { get; init; }
+        public List<(string Path, string Url)> UrlUploads { get; } = [];
+
+        public Task<Link> UploadFromUrlAsync(string path, string url, bool disableRedirects = false,
+            CancellationToken cancellationToken = default)
+        {
+            var link = UploadFromUrl?.Invoke(path, url);
+            UrlUploads.Add((path, url));
+            return link is null ? Done() : Task.FromResult(link);
+        }
 
         public Task<Link> GetUploadLinkAsync(string path, bool overwrite, CancellationToken cancellationToken = default)
             => Task.FromResult(new Link { Href = path });
@@ -698,6 +796,30 @@ public class YandexDiskFileProviderTests
         public Task<Link?> EmptyTrashAsync(string? path = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Link> RestoreFromTrashAsync(RestoreFromTrashRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Stream> DownloadAsync(Link link, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class LinkedFileItem(string name, long size, Uri link) : ITemporaryLinkItem
+    {
+        public bool Opened { get; private set; }
+        public string Name => name;
+        public string FullName => $"other:{name}";
+        public bool IsHidden => false;
+        public bool IsSystem => false;
+        public DateTimeOffset ChangedDate => DateTimeOffset.Now;
+        long? IFileProviderItem.Size => size;
+        public long Size => size;
+        public string Extension => Path.GetExtension(name);
+        public string NameWithoutExtension => Path.GetFileNameWithoutExtension(name);
+
+        public Task<Uri?> GetTemporaryLinkAsync(CancellationToken ct = default) => Task.FromResult<Uri?>(link);
+
+        public Task<(Stream stream, long totalBytes)> OpenReadAsync(CancellationToken ct = default)
+        {
+            Opened = true;
+            return Task.FromResult<(Stream, long)>((new MemoryStream([1, 2, 3]), 3));
+        }
+
+        public Task DeleteAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeFileItem(string name) : IFileItem
