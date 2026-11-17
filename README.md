@@ -633,7 +633,7 @@ public class MyProviderContractTests : FileProviderContractTests
 
 ### Prerequisites
 
-- .NET 10 SDK
+- .NET 11 SDK
 - Docker (for FTP integration tests via TestContainers)
 - [rclone](https://rclone.org) (for WebDAV integration tests: `rclone serve webdav` on a temp folder; set `RCLONE_PATH` if it is not on PATH)
 - rclone (for S3 integration tests: `rclone serve s3`)
