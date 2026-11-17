@@ -39,7 +39,7 @@ tests/
 
 ## Build config (Directory.Build.props)
 
-- `TargetFramework`: net10.0
+- `TargetFramework`: net11.0
 - `Nullable`: enable — **all code must be null-safe**
 - `LangVersion`: latest
 - `ImplicitUsings`: enable

@@ -43,7 +43,7 @@ FileVault/
 │   ├── FileVault.Local.Tests/            ← интеграционные тесты (реальная ФС в temp)
 │   ├── FileVault.Ftp.Tests/              ← интеграционные (требуется FTP-сервер, см. ниже)
 │   └── FileVault.Contract.Tests/        ← SHARED CONTRACT TESTS — главная ценность
-└── Directory.Build.props                 ← TargetFramework=net9.0, Nullable=enable, ImplicitUsings=enable
+└── Directory.Build.props                 ← TargetFramework=net11.0, Nullable=enable, ImplicitUsings=enable
 ```
 
 ### Зависимости (проверено существование на NuGet, версии уточнять при старте)
@@ -65,7 +65,7 @@ FileVault/
 ```xml
 <Project>
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
