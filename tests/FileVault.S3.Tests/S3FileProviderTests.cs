@@ -378,7 +378,7 @@ public class S3FileProviderTests
         var result = await provider.CopyFolderInAsync(folder, connection.FullName("dst"), new Progress<double>());
 
         Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
-        Assert.That(result.Result!.FullName, Is.EqualTo(connection.FullName("dst")));
+        Assert.That(result.Folder!.FullName, Is.EqualTo(connection.FullName("dst")));
         Assert.That(_s3.Keys(Bucket), Is.EqualTo(new[] { "dst/a.txt", "dst/deep/b.txt", "src/a.txt", "src/deep/b.txt" }));
     }
 
@@ -414,7 +414,7 @@ public class S3FileProviderTests
             provider.Connection.FullName("x"), new Progress<double>());
 
         Assert.That(result.IsSuccess, Is.True);
-        Assert.That(result.Result, Is.Null);
+        Assert.That(result.Folder, Is.Null);
         other.Dispose();
     }
 

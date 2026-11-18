@@ -216,42 +216,42 @@ public sealed class LocalFileProvider(string rootPath, ILocalRecycleBin? recycle
         }
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         // Cross-provider source (cloud, FTP, SFTP): no local path to copy from — let the orchestrator recurse.
         if (sourceItem is not SystemFolderItem)
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
 
         try
         {
             await CopyDirectoryAsync(sourceItem.FullName, destinationPath, ct).ConfigureAwait(false);
             progress.Report(1.0);
             IFolderItem? result = new SystemFolderItem(new DirectoryInfo(destinationPath), recycleBin);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 
-    public Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
+    public Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not SystemFolderItem || !OnSameDrive(sourceItem.FullName, destinationPath))
-                return Task.FromResult(FileOperationResult<IFolderItem?>.Success(null));
+                return Task.FromResult(FolderOperationResult.NotHandled);
 
             Directory.Move(sourceItem.FullName, destinationPath);
             progress.Report(1.0);
             IFolderItem? result = new SystemFolderItem(new DirectoryInfo(destinationPath), recycleBin);
-            return Task.FromResult(FileOperationResult<IFolderItem?>.Success(result));
+            return Task.FromResult(FolderOperationResult.Done(result));
         }
         catch (Exception ex)
         {
-            return Task.FromResult(FileOperationResult<IFolderItem?>.Failure(ex));
+            return Task.FromResult(FolderOperationResult.Failure(ex));
         }
     }
 

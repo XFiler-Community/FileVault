@@ -402,15 +402,15 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
     }
 
     // Google Drive API v3 has no server-side folder copy — signal orchestrator to recurse.
-    public Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
-        => Task.FromResult(FileOperationResult<IFolderItem?>.Success(null));
+        => Task.FromResult(FolderOperationResult.NotHandled);
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         if (sourceItem is not GoogleDriveFolderItem gdFolder || !IsSameAccount(gdFolder.Service))
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
 
         try
         {
@@ -423,11 +423,11 @@ public sealed class GoogleDriveFileProvider(DriveService service, string folderI
             await updateRequest.ExecuteAsync(ct).ConfigureAwait(false);
             progress.Report(1.0);
             IFolderItem? result = new GoogleDrivePlaceholderFolderItem(destParentId, newFolderName, service);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

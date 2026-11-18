@@ -202,8 +202,8 @@ public class YandexDiskFileProviderTests
         var copy = await provider.CopyFolderInAsync(folder, "disk:/Dest/Photos", new Progress<double>());
         var move = await provider.TryMoveFolderAsync(folder, "disk:/Dest/Photos", new Progress<double>());
 
-        Assert.That(copy.IsSuccess && copy.Result is null, Is.True);
-        Assert.That(move.IsSuccess && move.Result is null, Is.True);
+        Assert.That(copy.IsSuccess && copy.Folder is null, Is.True);
+        Assert.That(move.IsSuccess && move.Folder is null, Is.True);
         Assert.That(targetApi.Copies, Is.Empty);
         Assert.That(targetApi.Moves, Is.Empty);
     }

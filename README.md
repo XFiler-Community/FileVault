@@ -420,13 +420,18 @@ IFileProvider provider = location.Kind switch
 
 ## Core Operations
 
-All operations return `FileOperationResult<T>` — exceptions never propagate to the caller.
+All operations return `FileOperationResult<T>`, a C# 15 `union` of `OperationSucceeded<T>` and `OperationFailed` —
+exceptions never propagate to the caller. Folder copies and moves return `FolderOperationResult`: done, not handled
+(the caller walks the tree) or failed.
 
 ```csharp
 // Create folder (appends " (2)", " (3)", etc. on name conflict)
 var result = await provider.CreateFolderAsync("NewFolder");
-if (result.IsSuccess)
-    Console.WriteLine(result.Result!.FullName);
+Console.WriteLine(result switch
+{
+    OperationSucceeded<IFolderItem> created => created.Value.FullName,
+    OperationFailed failed => failed.Message,
+});
 
 // Copy a file INTO this provider from any other provider
 var copyResult = await destProvider.CopyFileInAsync(
@@ -460,10 +465,14 @@ var dest = await provider.ResolveDestinationFileAsync(sourceFile, overwrite: fal
 ```csharp
 async Task RecursiveCopyAsync(IFolderItem source, IFileProvider dest, string destPath)
 {
-    // Attempt native copy (Yandex Disk: server-side; others: returns null)
-    var result = await dest.CopyFolderInAsync(source, destPath, progress);
-    if (result.IsSuccess && result.Result is not null)
-        return; // done
+    // Attempt native copy (Yandex Disk: server-side; others: not handled)
+    switch (await dest.CopyFolderInAsync(source, destPath, progress))
+    {
+        case FolderOperationDone:
+            return;
+        case OperationFailed failed:
+            throw failed.Exception;
+    }
 
     // No native support — recurse manually
     await dest.CreateFolderAsync(source.Name);

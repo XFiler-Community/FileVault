@@ -35,8 +35,8 @@ public interface IFileProvider
     {
         var renamed = await RenameAsync(item, newName, ct).ConfigureAwait(false);
 
-        if (!renamed.IsSuccess)
-            return FileOperationResult<IFileProviderItem>.Failure(renamed.Exception!);
+        if (renamed is OperationFailed failed)
+            return failed;
 
         try
         {
@@ -64,15 +64,15 @@ public interface IFileProvider
         IProgress<double> progress, CancellationToken ct = default);
 
     /// <summary>
-    /// Same-provider: нативная копия. Cross-provider: возвращает Result == null — сигнал для оркестратора делать рекурсию.
+    /// Same-provider: нативная копия. Cross-provider: <see cref="FolderOperationNotHandled"/> — сигнал для оркестратора делать рекурсию.
     /// </summary>
-    Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default);
 
     /// <summary>
-    /// Same-provider: нативное перемещение. Cross-provider: возвращает Result == null.
+    /// Same-provider: нативное перемещение. Cross-provider: <see cref="FolderOperationNotHandled"/>.
     /// </summary>
-    Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
+    Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default);
 
     Task<bool> ContainsFileAsync(string fileName, CancellationToken ct = default);

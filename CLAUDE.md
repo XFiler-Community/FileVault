@@ -229,17 +229,17 @@ public interface IFileProvider
     /// <summary>
     /// Копирует папку В этот провайдер.
     /// Same-provider: нативная копия через API (server-side, быстро).
-    /// Cross-provider: ВОЗВРАЩАЕТ Result == null — оркестратор обходит дерево рекурсивно.
-    /// Null — это НЕ ошибка, это сигнал "делай сам".
+    /// Cross-provider: ВОЗВРАЩАЕТ FolderOperationNotHandled — оркестратор обходит дерево рекурсивно.
+    /// Это НЕ ошибка, это сигнал "делай сам".
     /// </summary>
-    Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default);
 
     /// <summary>
     /// Перемещает папку внутри одного провайдера нативно.
-    /// Cross-provider: возвращает Result == null — оркестратор делает CopyFolderIn + Delete.
+    /// Cross-provider: возвращает FolderOperationNotHandled — оркестратор делает CopyFolderIn + Delete.
     /// </summary>
-    Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+    Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default);
 
     // ── Проверки существования (по имени В ТЕКУЩЕЙ ПАПКЕ провайдера) ─────────
@@ -305,24 +305,23 @@ namespace FileVault.Core;
 /// (IO-ошибки, сетевые ошибки, нет прав). НЕ используется для программных ошибок —
 /// те бросают обычные исключения.
 /// </summary>
-public sealed class FileOperationResult<T>
+public sealed record OperationSucceeded<T>(T Value);
+
+public sealed record OperationFailed(Exception Exception);
+
+public union FileOperationResult<T>(OperationSucceeded<T>, OperationFailed)
 {
-    public T? Result { get; init; }
-    public Exception? Exception { get; init; }
+    public static FileOperationResult<T> Success(T result) => new OperationSucceeded<T>(result);
+    public static FileOperationResult<T> Failure(Exception exception) => new OperationFailed(exception);
 
-    public bool IsSuccess => Exception is null;
+    public bool IsSuccess => this is OperationSucceeded<T>;
+    public T? Result => this is OperationSucceeded<T> succeeded ? succeeded.Value : default;
+    public Exception? Exception => this is OperationFailed failed ? failed.Exception : null;
     public string? ErrorMessage => Exception?.Message;
-
-    public static FileOperationResult<T> Success(T result) => new() { Result = result };
-
-    public static FileOperationResult<T> Failure(Exception ex) => new() { Exception = ex };
-
-    public bool TryGetResult([NotNullWhen(true)] out T? result)
-    {
-        result = Result;
-        return IsSuccess;
-    }
 }
+
+/// <summary>Копирование или перемещение папки: готово, "делай сам" или ошибка.</summary>
+public union FolderOperationResult(FolderOperationDone, FolderOperationNotHandled, OperationFailed);
 ```
 
 ### FileOperationsHelper.cs
@@ -582,14 +581,14 @@ public class FtpFileProvider(AsyncFtpClient client, string remotePath) : IFilePr
     }
 
     // CopyFolderInAsync: для same-provider нет нативного copy в FTP протоколе
-    // → ВСЕГДА возвращать null (cross-provider алгоритм)
-    public Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(...)
+    // → ВСЕГДА возвращать NotHandled (cross-provider алгоритм)
+    public Task<FolderOperationResult> CopyFolderInAsync(...)
     {
-        return Task.FromResult(FileOperationResult<IFolderItem?>.Success(null));
+        return Task.FromResult(FolderOperationResult.NotHandled);
     }
 
     // TryMoveFolderAsync: MoveDirectory нативно есть в FluentFTP
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(...)
+    public async Task<FolderOperationResult> TryMoveFolderAsync(...)
     {
         if (sourceItem is not FtpFolderItem ftpFolder || ftpFolder.Client != client)
             return FileOperationResult<IFolderItem?>.Success(null); // cross-provider

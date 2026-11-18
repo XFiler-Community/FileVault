@@ -241,15 +241,15 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
 
     /// <summary>
     /// Within this drive — one server-side copy of the whole tree. Into a taken name (merge chosen) or from another
-    /// provider — Success(null): the orchestrator recurses.
+    /// provider — not handled: the orchestrator recurses.
     /// </summary>
-    public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not OneDriveFolderItem own || !ReferenceEquals(own.Client, client))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var (parentId, folderName) = ParseDestination(destinationPath);
 
@@ -257,26 +257,26 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
             {
                 var copied = await client.CopyAsync(own.Id, parentId, folderName, progress, ct).ConfigureAwait(false);
                 progress.Report(1);
-                return FileOperationResult<IFolderItem?>.Success(new OneDriveFolderItem(client, copied));
+                return FolderOperationResult.Done(new OneDriveFolderItem(client, copied));
             }
             catch (OneDriveApiException e) when (e.IsNameConflict)
             {
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
             }
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not OneDriveFolderItem own || !ReferenceEquals(own.Client, client))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var (parentId, folderName) = ParseDestination(destinationPath);
             var destinationParent = await client.ResolveIdAsync(parentId, ct).ConfigureAwait(false);
@@ -284,7 +284,7 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
             if (own.ParentId == destinationParent && own.Name == folderName)
             {
                 progress.Report(1);
-                return FileOperationResult<IFolderItem?>.Success(own);
+                return FolderOperationResult.Done(own);
             }
 
             try
@@ -292,16 +292,16 @@ public sealed class OneDriveFileProvider(OneDriveClient client, string folderId 
                 var moved = await client.UpdateAsync(own.Id, own.Name == folderName ? null : folderName,
                     own.ParentId == destinationParent ? null : destinationParent, ct).ConfigureAwait(false);
                 progress.Report(1);
-                return FileOperationResult<IFolderItem?>.Success(new OneDriveFolderItem(client, moved));
+                return FolderOperationResult.Done(new OneDriveFolderItem(client, moved));
             }
             catch (OneDriveApiException e) when (e.IsNameConflict)
             {
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
             }
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

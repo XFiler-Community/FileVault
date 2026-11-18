@@ -267,7 +267,7 @@ public class GoogleDriveTransferTests
 
         var result = await provider.TryMoveFolderAsync(folder, "gdrive:root/Photos", new Progress<double>());
 
-        Assert.That(result.IsSuccess && result.Result is null, Is.True);
+        Assert.That(result.IsSuccess && result.Folder is null, Is.True);
         Assert.That(targetRequests, Is.Zero);
     }
 

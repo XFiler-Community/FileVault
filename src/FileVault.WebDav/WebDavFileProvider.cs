@@ -240,39 +240,39 @@ public sealed class WebDavFileProvider : IFileProvider, IFolderSizeProvider, IPa
     /// Same server — one COPY of the whole folder. When the destination folder already exists (or the item is from
     /// elsewhere) the result is null and the caller copies item by item, merging instead of replacing the folder.
     /// </summary>
-    public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (SameServerPath(sourceItem) is not { } source)
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
             EnsureNotInside(source, destination);
 
             if (!await Client.TransferAsync(move: false, source, destination, collection: true, overwrite: false, ct)
                     .ConfigureAwait(false))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             progress.Report(1.0);
             IFolderItem? result = new WebDavPlaceholderFolderItem(_connection, destination);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 
     /// <summary>Same server — one MOVE; an existing destination folder or a foreign item — null (merge by recursion).</summary>
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (SameServerPath(sourceItem) is not { } source)
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
 
@@ -282,16 +282,16 @@ public sealed class WebDavFileProvider : IFileProvider, IFolderSizeProvider, IPa
 
                 if (!await Client.TransferAsync(move: true, source, destination, collection: true, overwrite: false, ct)
                         .ConfigureAwait(false))
-                    return FileOperationResult<IFolderItem?>.Success(null);
+                    return FolderOperationResult.NotHandled;
             }
 
             progress.Report(1.0);
             IFolderItem? result = new WebDavPlaceholderFolderItem(_connection, destination);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

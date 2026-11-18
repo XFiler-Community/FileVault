@@ -158,19 +158,19 @@ public class WebDavIntegrationTests
 
         var copy = await _provider.CopyFolderInAsync(source, _connection.GetFullName($"{_folder}/copy %"), new Progress<double>());
         Assert.That(copy.IsSuccess, Is.True, copy.ErrorMessage);
-        Assert.That(copy.Result, Is.Not.Null);
+        Assert.That(copy.Folder, Is.Not.Null);
         Assert.That(File.ReadAllText(Local("copy %", "deep", "f.txt")), Is.EqualTo("hello"));
 
         var again = await _provider.CopyFolderInAsync(source, _connection.GetFullName($"{_folder}/copy %"), new Progress<double>());
         Assert.That(again.IsSuccess, Is.True, again.ErrorMessage);
-        Assert.That(again.Result, Is.Null, "an existing folder is merged by the caller, never replaced");
+        Assert.That(again.Folder, Is.Null, "an existing folder is merged by the caller, never replaced");
 
         var inside = await _provider.CopyFolderInAsync(source, _connection.GetFullName($"{_folder}/src #1/deep/x"), new Progress<double>());
         Assert.That(inside.IsSuccess, Is.False);
 
         var move = await _provider.TryMoveFolderAsync(source, _connection.GetFullName($"{_folder}/moved"), new Progress<double>());
         Assert.That(move.IsSuccess, Is.True, move.ErrorMessage);
-        Assert.That(move.Result, Is.Not.Null);
+        Assert.That(move.Folder, Is.Not.Null);
         Assert.That(Directory.Exists(Local("src #1")), Is.False);
         Assert.That(File.ReadAllText(Local("moved", "deep", "f.txt")), Is.EqualTo("hello"));
     }
@@ -190,7 +190,7 @@ public class WebDavIntegrationTests
 
         Assert.That(foreign, Is.Empty);
         Assert.That(result.IsSuccess, Is.True);
-        Assert.That(result.Result, Is.Null);
+        Assert.That(result.Folder, Is.Null);
         Assert.That(Directory.Exists(Local("f")), Is.True);
     }
 
