@@ -518,10 +518,12 @@ Yandex Disk and Dropbox can download a file from a link by themselves. When the 
 needs no credentials (`ITemporaryLinkItem`: Yandex Disk, Dropbox, OneDrive, S3 presigned URLs), their `CopyFileInAsync`
 asks them to fetch it (`UrlTransfer`) instead of streaming the bytes through your machine. Files under 16 MiB, a
 destination path that already exists, a link the destination cannot reach, or a result of another size fall back to
-streaming, so the copy itself never fails because of it. The destination reports no progress meanwhile.
+streaming, so the copy itself never fails because of it. The destination reports no progress meanwhile. It also cannot
+be stopped: a cancelled copy returns once the destination has finished and the file it downloaded is removed.
 
 ```csharp
 UrlTransfer.FellBack += (file, reason, error) => logger.LogInformation("{File}: streamed, {Reason}", file, reason);
+UrlTransfer.CancelledCopyLeft += (file, error) => logger.LogWarning(error, "{File}: cancelled, but may stay at the destination", file);
 UrlTransfer.Enabled = false; // stream every copy
 ```
 

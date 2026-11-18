@@ -105,6 +105,76 @@ public class UrlTransferTests
             Throws.InstanceOf<OperationCanceledException>());
     }
 
+    [Test]
+    public async Task Cancelled_WaitsForTheDestination_ThenRemovesItsFile()
+    {
+        using var cts = new CancellationTokenSource();
+        var downloaded = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fetchToken = CancellationToken.None;
+        var discarded = false;
+
+        var copy = UrlTransfer.TryAsync(new Linked(Large, Link),
+            (_, token) => { fetchToken = token; return downloaded.Task; },
+            _ => { discarded = true; return Task.CompletedTask; }, cts.Token);
+
+        await cts.CancelAsync();
+        await Task.Delay(50);
+
+        Assert.That(copy.IsCompleted, Is.False, "the destination is still downloading");
+        Assert.That(fetchToken.IsCancellationRequested, Is.False);
+        Assert.That(discarded, Is.False);
+
+        downloaded.SetResult(Large);
+
+        Assert.That(async () => await copy, Throws.InstanceOf<OperationCanceledException>());
+        Assert.That(discarded, Is.True);
+    }
+
+    [Test]
+    public async Task Cancelled_DestinationFailed_RemovesNothing()
+    {
+        using var cts = new CancellationTokenSource();
+        var downloaded = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var copy = UrlTransfer.TryAsync(new Linked(Large, Link),
+            (_, _) => downloaded.Task,
+            _ => throw new AssertionException("a file that was there before must not be removed"), cts.Token);
+
+        await cts.CancelAsync();
+        downloaded.SetException(new HttpRequestException("409 exists"));
+
+        Assert.That(async () => await copy, Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task NewCopy_WaitsUntilTheCancelledOneToTheSamePathIsGone()
+    {
+        const string destination = "disk:/film.mp4";
+        using var cts = new CancellationTokenSource();
+        var downloaded = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new List<string>();
+
+        var cancelled = UrlTransfer.TryAsync(new Linked(Large, Link),
+            (_, _) => downloaded.Task,
+            _ => { order.Add("removed"); return Task.CompletedTask; }, cts.Token, destination);
+
+        await cts.CancelAsync();
+        await Task.Delay(50);
+
+        var again = UrlTransfer.TryAsync(new Linked(Large, Link),
+            (_, _) => { order.Add("copied"); return Task.FromResult(Large); },
+            _ => Task.CompletedTask, destination: destination);
+
+        await Task.Delay(50);
+        Assert.That(order, Is.Empty);
+
+        downloaded.SetResult(Large);
+
+        Assert.That(async () => await cancelled, Throws.InstanceOf<OperationCanceledException>());
+        Assert.That(await again, Is.True);
+        Assert.That(order, Is.EqualTo(new[] { "removed", "copied" }));
+    }
+
     private class Plain(long size) : IFileItem
     {
         public string Name => "film.mp4";

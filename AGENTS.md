@@ -174,9 +174,13 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
   OneDrive personal only and not done; Google Drive has no such API.
 - `UrlTransfer` never makes a copy fail: no link, a file under `MinimumSize` (16 MiB), a plain-http link, a refusal or
   failure of the destination → `false`, and the provider streams. The destination may save whatever the link answered
-  (an error page), so the size it reports is compared with the source's; a wrong file is discarded (`discard` runs only
-  then — never after a refusal, which may mean an existing file). `FellBack` tells a client why, for its log. Never put
-  the link in an exception message or a log: it opens the file.
+  (an error page), so the size it reports is compared with the source's; a wrong file is discarded (`discard` never
+  runs after a refusal, which may mean an existing file). `FellBack` tells a client why, for its log. Never put the
+  link in an exception message or a log: it opens the file.
+- A destination cannot be told to stop, so `fetch` does not get the caller's token: on a cancel `TryAsync` waits for it
+  (`CancelledCopyWait`, 1 h), discards what it downloaded and only then throws. A copy to the same `destination` waits
+  for that first (`WhenCancelledCopyGoneAsync`), or the discard would remove the new file. `CancelledCopyLeft` reports
+  a copy that could not be taken back.
 
 ### Error handling — non-negotiable
 

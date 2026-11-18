@@ -388,7 +388,7 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
             },
             token => api.Commands.DeleteAndWaitAsync(
                 new DeleteFileRequest { Path = destinationPath, Permanently = true }, token),
-            ct);
+            ct, destinationPath);
 
     public async Task<FileOperationResult<IFileItem>> MoveFileInAsync(IFileItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
