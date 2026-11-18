@@ -219,13 +219,13 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
     }
 
     /// <summary>Within the repository a folder copy is one tree entry pointing at the same tree; elsewhere — recurse.</summary>
-    public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not GitHubFolderItem own || !ReferenceEquals(own.Repository, repository))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
             EnsureNotInside(own.Path, destination);
@@ -234,21 +234,21 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
                 null, ct).ConfigureAwait(false);
             progress.Report(1);
 
-            return FileOperationResult<IFolderItem?>.Success(new GitHubFolderItem(repository, destination, DateTimeOffset.Now));
+            return FolderOperationResult.Done(new GitHubFolderItem(repository, destination, DateTimeOffset.Now));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not GitHubFolderItem own || !ReferenceEquals(own.Repository, repository))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
             EnsureNotInside(own.Path, destination);
@@ -258,11 +258,11 @@ public sealed class GitHubFileProvider(GitHubRepository repository, string path 
                     $"Move {own.Path} to {destination}", null, ct).ConfigureAwait(false);
 
             progress.Report(1);
-            return FileOperationResult<IFolderItem?>.Success(new GitHubFolderItem(repository, destination, DateTimeOffset.Now));
+            return FolderOperationResult.Done(new GitHubFolderItem(repository, destination, DateTimeOffset.Now));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

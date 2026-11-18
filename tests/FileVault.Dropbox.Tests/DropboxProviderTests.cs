@@ -521,7 +521,7 @@ public class DropboxProviderTests
         var copy = await _client.CreateProvider().CopyFolderInAsync(folder, "dropbox:/Copy", new RecordingProgress());
 
         Assert.That(copy.IsSuccess, Is.True, copy.ErrorMessage);
-        Assert.That(copy.Result!.FullName, Is.EqualTo("dropbox:/Copy"));
+        Assert.That(copy.Folder!.FullName, Is.EqualTo("dropbox:/Copy"));
         Assert.That(_dropbox.Read("/Copy/sub/3.txt"), Is.EqualTo("3"u8.ToArray()));
         Assert.That(_dropbox.Routes.Count(r => r == "files/copy_batch/check_v2"), Is.EqualTo(3));
     }
@@ -537,7 +537,7 @@ public class DropboxProviderTests
         var move = await _client.CreateProvider("/B").TryMoveFolderAsync(folder, "dropbox:/B/A", new RecordingProgress());
 
         Assert.That(move.IsSuccess, Is.True, move.ErrorMessage);
-        Assert.That(move.Result, Is.Null);
+        Assert.That(move.Folder, Is.Null);
         Assert.That(_dropbox.Read("/A/1.txt"), Is.Not.Null);
     }
 

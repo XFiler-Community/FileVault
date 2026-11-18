@@ -334,13 +334,13 @@ public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvide
     }
 
     /// <summary>Within the account every key under the folder is copied on the server; elsewhere — recurse.</summary>
-    public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not S3FolderItem own || !own.Connection.IsSameAccount(_connection))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
 
@@ -355,21 +355,21 @@ public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvide
             await CopyPrefixAsync(own.Connection, own.Path, destination, progress, ct).ConfigureAwait(false);
             progress.Report(1);
 
-            return FileOperationResult<IFolderItem?>.Success(new S3FolderItem(_connection, destination, DateTimeOffset.Now));
+            return FolderOperationResult.Done(new S3FolderItem(_connection, destination, DateTimeOffset.Now));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not S3FolderItem own || !own.Connection.IsSameAccount(_connection))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
             var sameBucket = own.Connection.IsSameBucket(_connection);
@@ -381,11 +381,11 @@ public sealed class S3FileProvider : ISearchableFileProvider, IFolderSizeProvide
                 await MovePrefixAsync(own.Connection, own.Path, destination, progress, ct).ConfigureAwait(false);
 
             progress.Report(1);
-            return FileOperationResult<IFolderItem?>.Success(new S3FolderItem(_connection, destination, DateTimeOffset.Now));
+            return FolderOperationResult.Done(new S3FolderItem(_connection, destination, DateTimeOffset.Now));
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

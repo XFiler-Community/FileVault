@@ -420,13 +420,13 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
         }
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         ForgetSizes(api);
 
         if (sourceItem is not YandexDiskFolderItem ydFolder || !IsSameAccount(ydFolder.Api))
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
 
         try
         {
@@ -435,21 +435,21 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
                 .ConfigureAwait(false);
             progress.Report(1.0);
             IFolderItem? result = new YandexDiskPlaceholderFolderItem(destinationPath, api);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         ForgetSizes(api);
 
         if (sourceItem is not YandexDiskFolderItem ydFolder || !IsSameAccount(ydFolder.Api))
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
 
         try
         {
@@ -458,11 +458,11 @@ public sealed class YandexDiskFileProvider(IDiskApi api, string remotePath) : IS
                 .ConfigureAwait(false);
             progress.Report(1.0);
             IFolderItem? result = new YandexDiskPlaceholderFolderItem(destinationPath, api);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

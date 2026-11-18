@@ -354,10 +354,10 @@ public class OneDriveClientTests
         var copied = await _provider.CopyFolderInAsync(folder, $"onedrive:{_folderId}/Copy", new NullProgress());
         var taken = await _provider.CopyFolderInAsync(folder, $"onedrive:{_folderId}/Taken", new NullProgress());
 
-        Assert.That(copied.Result?.Name, Is.EqualTo("Copy"));
+        Assert.That(copied.Folder?.Name, Is.EqualTo("Copy"));
         Assert.That(_graph.Find(_graph.Find(_graph.Find(_folderId, "Copy")!.Id, "Deep")!.Id, "d.txt"), Is.Not.Null);
         Assert.That(taken.IsSuccess, Is.True);
-        Assert.That(taken.Result, Is.Null);
+        Assert.That(taken.Folder, Is.Null);
     }
 
     [Test]
@@ -402,9 +402,9 @@ public class OneDriveClientTests
             new NullProgress());
         var foreign = await _provider.TryMoveFolderAsync(new ForeignFolder(), $"onedrive:{target}/X", new NullProgress());
 
-        Assert.That(moved.Result?.FullName, Is.EqualTo($"onedrive:{_graph.Find(target, "Src")!.Id}"));
+        Assert.That(moved.Folder?.FullName, Is.EqualTo($"onedrive:{_graph.Find(target, "Src")!.Id}"));
         Assert.That(foreign.IsSuccess, Is.True);
-        Assert.That(foreign.Result, Is.Null);
+        Assert.That(foreign.Folder, Is.Null);
     }
 
     [Test]

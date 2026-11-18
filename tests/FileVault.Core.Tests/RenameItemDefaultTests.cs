@@ -127,10 +127,10 @@ public class RenameItemDefaultTests
         public Task<FileOperationResult<IFileItem>> MoveFileInAsync(IFileItem sourceItem, string destinationPath,
             IProgress<double> progress, CancellationToken ct = default) => throw new NotSupportedException();
 
-        public Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+        public Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
             IProgress<double> progress, CancellationToken ct = default) => throw new NotSupportedException();
 
-        public Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+        public Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
             string destinationPath, IProgress<double> progress, CancellationToken ct = default) =>
             throw new NotSupportedException();
 

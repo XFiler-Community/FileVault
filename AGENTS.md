@@ -182,6 +182,8 @@ Global properties from Directory.Build.props apply — don't repeat TargetFramew
 
 Every `IFileProvider` method wraps its body in `try/catch(Exception ex)` and returns `FileOperationResult<T>.Failure(ex)`. Exceptions **never propagate** from provider methods to callers. Programming errors (null args, wrong state) are the only exception — those throw normally.
 
+`FileOperationResult<T>` is a C# 15 union of `OperationSucceeded<T>` and `OperationFailed`. Folder copies and moves return `FolderOperationResult`: `FolderOperationDone`, `FolderOperationNotHandled` (another provider's folder or no native operation: the caller walks the tree; not an error) or `OperationFailed`.
+
 ```csharp
 public Task<FileOperationResult<IFolderItem>> CreateFolderAsync(string name, CancellationToken ct = default)
 {

@@ -156,7 +156,7 @@ public class RcloneProviderTests
         Assert.That(await File.ReadAllBytesAsync(Path.Combine(Folder, "copy", "deep", "b.txt")), Is.EqualTo(new byte[] { 2 }));
         Assert.That(File.Exists(Path.Combine(Folder, "src", "a.txt")), Is.True);
 
-        var rename = await provider.RenameAsync(copy.Result!, "renamed");
+        var rename = await provider.RenameAsync(copy.Folder!, "renamed");
         Assert.That(rename.IsSuccess, Is.True, rename.ErrorMessage);
         Assert.That(await File.ReadAllBytesAsync(Path.Combine(Folder, "renamed", "a.txt")), Is.EqualTo(new byte[] { 1 }));
         Assert.That(Directory.Exists(Path.Combine(Folder, "copy")), Is.False);

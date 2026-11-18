@@ -174,26 +174,26 @@ public sealed class SftpFileProvider(SftpClient client, string remotePath) : IFi
         }
     }
 
-    public Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
-        => Task.FromResult(FileOperationResult<IFolderItem?>.Success(null));
+        => Task.FromResult(FolderOperationResult.NotHandled);
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         if (sourceItem is not SftpFolderItem sftpFolder || !ReferenceEquals(sftpFolder.Client, client))
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
 
         try
         {
             await client.RenameFileAsync(sftpFolder.FullName, destinationPath, ct).ConfigureAwait(false);
             progress.Report(1.0);
             IFolderItem? result = new SftpPlaceholderFolderItem(destinationPath, client);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

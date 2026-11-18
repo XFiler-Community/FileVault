@@ -47,9 +47,9 @@ static async Task<int> MkdirAsync(string path, string name)
     }
 
     var result = await provider.CreateFolderAsync(name);
-    if (result.IsSuccess)
+    if (result is OperationSucceeded<IFolderItem> created)
     {
-        Console.WriteLine($"Created: {result.Result!.FullName}");
+        Console.WriteLine($"Created: {created.Value.FullName}");
         return 0;
     }
     Console.Error.WriteLine($"Error: {result.ErrorMessage}");
@@ -89,9 +89,9 @@ static async Task<int> CopyAsync(string sourcePath, string destPath)
     var result = await destProvider.CopyFileInAsync(sourceItem, fullDestPath, progress);
     Console.WriteLine();
 
-    if (result.IsSuccess)
+    if (result is OperationSucceeded<IFileItem> copied)
     {
-        Console.WriteLine($"Copied to: {result.Result!.FullName}");
+        Console.WriteLine($"Copied to: {copied.Value.FullName}");
         return 0;
     }
     Console.Error.WriteLine($"Error: {result.ErrorMessage}");
@@ -131,9 +131,9 @@ static async Task<int> MoveAsync(string sourcePath, string destPath)
     var result = await destProvider.MoveFileInAsync(sourceItem, fullDestPath, progress);
     Console.WriteLine();
 
-    if (result.IsSuccess)
+    if (result is OperationSucceeded<IFileItem> moved)
     {
-        Console.WriteLine($"Moved to: {result.Result!.FullName}");
+        Console.WriteLine($"Moved to: {moved.Value.FullName}");
         return 0;
     }
     Console.Error.WriteLine($"Error: {result.ErrorMessage}");

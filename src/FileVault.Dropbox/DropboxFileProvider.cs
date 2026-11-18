@@ -295,15 +295,15 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
 
     /// <summary>
     /// Same account: <c>copy_v2</c> of the whole folder (a batch job over 10 000 entries). When the destination
-    /// folder already exists Dropbox cannot merge into it: <c>Success(null)</c> lets the caller copy item by item.
+    /// folder already exists Dropbox cannot merge into it: <see cref="FolderOperationNotHandled"/> lets the caller copy item by item.
     /// </summary>
-    public async Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not DropboxFolderItem own || !ReferenceEquals(own.Client, client))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
             EnsureNotInside(own.Path, destination);
@@ -311,32 +311,32 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
             var entry = await client.CopyAsync(own.Path, destination, ct).ConfigureAwait(false);
             progress.Report(1);
 
-            return FileOperationResult<IFolderItem?>.Success(new DropboxFolderItem(client, entry));
+            return FolderOperationResult.Done(new DropboxFolderItem(client, entry));
         }
         catch (DropboxApiException e) when (e.HasPath("to/conflict"))
         {
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem,
         string destinationPath, IProgress<double> progress, CancellationToken ct = default)
     {
         try
         {
             if (sourceItem is not DropboxFolderItem own || !ReferenceEquals(own.Client, client))
-                return FileOperationResult<IFolderItem?>.Success(null);
+                return FolderOperationResult.NotHandled;
 
             var destination = ParseDestination(destinationPath);
 
             if (own.Path == destination)
             {
                 progress.Report(1);
-                return FileOperationResult<IFolderItem?>.Success(own);
+                return FolderOperationResult.Done(own);
             }
 
             var entry = DropboxPath.AreSame(own.Path, destination)
@@ -344,15 +344,15 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
                 : await MoveFolderAsync(own.Path, destination, ct).ConfigureAwait(false);
 
             progress.Report(1);
-            return FileOperationResult<IFolderItem?>.Success(new DropboxFolderItem(client, entry));
+            return FolderOperationResult.Done(new DropboxFolderItem(client, entry));
         }
         catch (DropboxApiException e) when (e.HasPath("to/conflict"))
         {
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

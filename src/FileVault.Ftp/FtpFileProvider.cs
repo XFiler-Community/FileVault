@@ -188,29 +188,29 @@ public sealed class FtpFileProvider(AsyncFtpClient client, string remotePath) : 
         }
     }
 
-    public Task<FileOperationResult<IFolderItem?>> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
+    public Task<FolderOperationResult> CopyFolderInAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         // FTP протокол не поддерживает нативное копирование директорий — сигнализируем оркестратору делать рекурсию.
-        return Task.FromResult(FileOperationResult<IFolderItem?>.Success(null));
+        return Task.FromResult(FolderOperationResult.NotHandled);
     }
 
-    public async Task<FileOperationResult<IFolderItem?>> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
+    public async Task<FolderOperationResult> TryMoveFolderAsync(IFolderItem sourceItem, string destinationPath,
         IProgress<double> progress, CancellationToken ct = default)
     {
         if (sourceItem is not FtpFolderItem ftpFolder || !ReferenceEquals(ftpFolder.Client, client))
-            return FileOperationResult<IFolderItem?>.Success(null);
+            return FolderOperationResult.NotHandled;
 
         try
         {
             await client.MoveDirectory(ftpFolder.FullName, destinationPath, FtpRemoteExists.Overwrite, ct).ConfigureAwait(false);
             progress.Report(1.0);
             IFolderItem? result = new FtpPlaceholderFolderItem(destinationPath, client);
-            return FileOperationResult<IFolderItem?>.Success(result);
+            return FolderOperationResult.Done(result);
         }
         catch (Exception ex)
         {
-            return FileOperationResult<IFolderItem?>.Failure(ex);
+            return FolderOperationResult.Failure(ex);
         }
     }
 

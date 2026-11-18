@@ -32,7 +32,7 @@ public class LocalFileProviderCrossProviderTests
         var result = await provider.CopyFolderInAsync(source, dest.FullName, new Progress<double>());
 
         Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
-        Assert.That(result.Result, Is.Null);
+        Assert.That(result.Folder, Is.Null);
         Assert.That(Directory.Exists(dest.FullName), Is.False);
     }
 
@@ -46,7 +46,7 @@ public class LocalFileProviderCrossProviderTests
         var result = await provider.TryMoveFolderAsync(source, dest.FullName, new Progress<double>());
 
         Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
-        Assert.That(result.Result, Is.Null);
+        Assert.That(result.Folder, Is.Null);
         Assert.That(Directory.Exists(dest.FullName), Is.False);
     }
 
@@ -67,7 +67,7 @@ public class LocalFileProviderCrossProviderTests
         var result = await provider.CopyFolderInAsync(source, dest.FullName, new Progress<double>());
 
         Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
-        Assert.That(result.Result, Is.Not.Null);
+        Assert.That(result.Folder, Is.Not.Null);
         Assert.That(File.ReadAllBytes(Path.Combine(destRoot, "src", "nested", "a.bin")), Is.EqualTo(new byte[] { 1, 2 }));
     }
 
