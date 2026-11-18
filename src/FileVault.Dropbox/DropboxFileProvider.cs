@@ -229,6 +229,9 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
     /// </summary>
     private async Task<DropboxEntry?> FetchByLinkAsync(IFileItem sourceItem, string destination, CancellationToken ct)
     {
+        // before looking at the path: a cancelled copy's file may be there for a moment
+        await UrlTransfer.WhenCancelledCopyGoneAsync(destination, ct).ConfigureAwait(false);
+
         if (sourceItem is not ITemporaryLinkItem || !UrlTransfer.Enabled || sourceItem.Size < UrlTransfer.MinimumSize
             || await client.GetEntryAsync(destination, ct).ConfigureAwait(false) is not null)
             return null;
@@ -250,7 +253,7 @@ public sealed class DropboxFileProvider(DropboxClient client, string path = "")
                 return saved.Size;
             },
             token => client.DeleteAsync(destination, token),
-            ct).ConfigureAwait(false);
+            ct, destination).ConfigureAwait(false);
 
         return done ? saved : null;
     }
